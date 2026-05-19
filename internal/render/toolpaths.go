@@ -3,9 +3,10 @@ package render
 import (
 	"image"
 	"image/color"
+	"math"
+	"sort"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/lestrrat-go/makislicer/internal/mesh"
 	"github.com/lestrrat-go/makislicer/internal/slice"
@@ -51,17 +52,20 @@ type LegendEntry struct {
 	Label string
 }
 
-// ToolpathDrawer renders sliced layers as projected line segments
-// through the same [Camera] the mesh viewer uses. The two views share a
-// camera so the user can swap between mesh and toolpaths without losing
-// orbit / pan state.
+// ToolpathDrawer renders sliced layers as ribbon-shaped extrusion
+// segments depth-sorted in view space, so upper layers occlude lower
+// ones the way they would in a real print preview. Each segment is
+// projected to two screen-space endpoints, expanded into a rectangle
+// of width = roleStrokeWidth perpendicular to the segment direction,
+// and shipped through Ebitengine's DrawTriangles after a back-to-front
+// painter's sort.
 //
-// Each visible path is appended into a [vector.Path] bucketed by role,
-// then the four buckets are stroked once per layer. That keeps Z-order
-// overdraw correct (lower layers first) while collapsing what used to
-// be one [vector.StrokeLine] call per segment into one [vector.StrokePath]
-// call per (layer, role) — a 1-to-2-order-of-magnitude reduction in
-// per-frame overhead for typical Benchy/Wind-Turbine slices.
+// The previous (per-segment vector.StrokeLine, then per-(layer, role)
+// vector.StrokePath) renderers drew flat 2D strokes and so let the
+// viewer "see through" to layers on the far side of the model. This
+// implementation hands every segment its own view-Z so depth ordering
+// is global, not just per-layer — which is what makes the preview feel
+// 3D.
 type ToolpathDrawer struct {
 	// LineWidthPx is the preview stroke thickness in pixels. Real
 	// extrusion width is layer-dependent and the path knows its true
@@ -69,52 +73,19 @@ type ToolpathDrawer struct {
 	// it reads better at any zoom level.
 	LineWidthPx float32
 
-	// rolePaths is one [vector.Path] per role bucket. Kept on the drawer
-	// so the underlying segment storage is reused across frames; each
-	// bucket is Reset() at the start of every layer's pass.
-	rolePaths [numRoleBuckets]vector.Path
+	// Scratch buffers reused across frames.
+	quads   []segmentQuad
+	verts   []ebiten.Vertex
+	indices []uint16
 }
 
-// roleBucket indexes ToolpathDrawer.rolePaths. The order here also
-// dictates draw order within a layer: outer walls go down first, then
-// inner walls, then sparse infill, then solid infill, mirroring how
-// the slicer emitted them. Keep this in sync with [bucketForRole].
-type roleBucket int
-
-const (
-	bucketExternalPerimeter roleBucket = iota
-	bucketPerimeter
-	bucketInfill
-	bucketSolidInfill
-	numRoleBuckets
-)
-
-func bucketForRole(r slice.PathRole) (roleBucket, bool) {
-	switch r {
-	case slice.RoleExternalPerimeter:
-		return bucketExternalPerimeter, true
-	case slice.RolePerimeter:
-		return bucketPerimeter, true
-	case slice.RoleInfill:
-		return bucketInfill, true
-	case slice.RoleSolidInfill:
-		return bucketSolidInfill, true
-	}
-	return 0, false
-}
-
-func roleForBucket(b roleBucket) slice.PathRole {
-	switch b {
-	case bucketExternalPerimeter:
-		return slice.RoleExternalPerimeter
-	case bucketPerimeter:
-		return slice.RolePerimeter
-	case bucketInfill:
-		return slice.RoleInfill
-	case bucketSolidInfill:
-		return slice.RoleSolidInfill
-	}
-	return slice.RoleTravel
+// segmentQuad is one extrusion segment ready to draw: the four screen-
+// space corners (already coloured) plus a depth key for the painter
+// sort. avgZ is in camera view space, where more-negative is further
+// from the camera (see [Camera.Project]).
+type segmentQuad struct {
+	v0, v1, v2, v3 ebiten.Vertex
+	avgZ           float32
 }
 
 // NewToolpathDrawer returns a drawer with a 1.5px stroke. Callers can
@@ -139,16 +110,13 @@ func roleStrokeWidth(base float32, r slice.PathRole) float32 {
 	return base * 0.9
 }
 
-// Draw projects every path in layers through cam into dstBounds and
-// strokes each segment. Layers are drawn in Z order (bottom up) so
-// upper layers paint over lower ones — a cheap approximation of depth
-// that works because adjacent layers' paths almost never overlap.
-//
-// Within a layer all paths are first bucketed by role into a single
-// [vector.Path] each, then each non-empty bucket is stroked with one
-// [vector.StrokePath] call. The bucket order — outer → inner → sparse
-// → solid — matches the slicer's emit order, so a Benchy's outer walls
-// still sit on top of the infill that lives under them.
+// Draw walks every extrusion segment in layers, projects it to screen
+// space, builds a ribbon-shaped quad for it, depth-sorts the whole
+// pile in view space, and ships them all through one (or, when the
+// uint16 index cap is exceeded, a small handful of) DrawTriangles
+// calls. The global depth sort is what gives the preview a tube-like
+// feel: closer-to-camera segments paint over further ones regardless
+// of which layer they belong to.
 func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, layers []slice.Layer, cam *Camera) {
 	w := dstBounds.Dx()
 	h := dstBounds.Dy()
@@ -161,92 +129,136 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 	fw := float32(w)
 	fh := float32(h)
 
-	strokeOpts := [numRoleBuckets]vector.StrokeOptions{}
-	for b := roleBucket(0); b < numRoleBuckets; b++ {
-		strokeOpts[b] = vector.StrokeOptions{
-			Width:      roleStrokeWidth(d.LineWidthPx, roleForBucket(b)),
-			LineJoin:   vector.LineJoinBevel,
-			MiterLimit: 4,
-		}
-	}
-	drawOpts := [numRoleBuckets]vector.DrawPathOptions{}
-	for b := roleBucket(0); b < numRoleBuckets; b++ {
-		drawOpts[b] = vector.DrawPathOptions{}
-		drawOpts[b].ColorScale.ScaleWithColor(RoleColor(roleForBucket(b)))
-	}
+	d.quads = d.quads[:0]
 
 	for li := range layers {
-		for b := range d.rolePaths {
-			d.rolePaths[b].Reset()
-		}
-		anyBucket := [numRoleBuckets]bool{}
-		layerZ := layers[li].Z
+		layerZ := float32(layers[li].Z)
 		for _, p := range layers[li].Paths {
 			if !p.Role.IsExtrusion() || len(p.Points) < 2 {
 				continue
 			}
-			b, ok := bucketForRole(p.Role)
-			if !ok {
-				continue
+			sw := roleStrokeWidth(d.LineWidthPx, p.Role)
+			halfW := sw * 0.5
+			rc := RoleColor(p.Role)
+			cr := float32(rc.R) / 255
+			cg := float32(rc.G) / 255
+			cb := float32(rc.B) / 255
+
+			n := len(p.Points)
+			segs := n - 1
+			if p.Closed {
+				segs = n
 			}
-			path := &d.rolePaths[b]
-			subStarted := false
-			firstOK := false
-			var firstSx, firstSy float32
-			for i, pt := range p.Points {
-				pr := project(cam, layerZ, pt, aspect, x0, y0, fw, fh)
-				if !pr.ok {
-					// Vertex behind the camera — break the polyline.
-					// A later in-front vertex will start a fresh sub-path.
-					subStarted = false
+			for i := 0; i < segs; i++ {
+				a := p.Points[i]
+				b := p.Points[(i+1)%n]
+				pa := cam.Project(mesh.Vec3{float32(a.X), float32(a.Y), layerZ}, aspect)
+				pb := cam.Project(mesh.Vec3{float32(b.X), float32(b.Y), layerZ}, aspect)
+				if !pa.InFront || !pb.InFront {
 					continue
 				}
-				if i == 0 {
-					firstSx, firstSy = pr.sx, pr.sy
-					firstOK = true
+				ax := x0 + (pa.X+1)*0.5*fw
+				ay := y0 + (1-(pa.Y+1)*0.5)*fh
+				bx := x0 + (pb.X+1)*0.5*fw
+				by := y0 + (1-(pb.Y+1)*0.5)*fh
+				dx := bx - ax
+				dy := by - ay
+				len2 := dx*dx + dy*dy
+				if len2 < 1e-8 {
+					// Sub-pixel segment — skip rather than emit a
+					// degenerate quad whose perpendicular direction
+					// is undefined.
+					continue
 				}
-				if !subStarted {
-					path.MoveTo(pr.sx, pr.sy)
-					subStarted = true
-				} else {
-					path.LineTo(pr.sx, pr.sy)
-				}
-				anyBucket[b] = true
-			}
-			// Close the loop manually rather than using Path.Close:
-			// Close only joins the current sub-path to its MoveTo, but
-			// if any vertex went behind the camera we may have emitted
-			// multiple sub-paths and want the seam to land back at the
-			// original first vertex specifically. Skip when either the
-			// first vertex was never in front, or the closing edge
-			// would dangle from a broken sub-path.
-			if p.Closed && subStarted && firstOK {
-				path.LineTo(firstSx, firstSy)
+				inv := float32(1.0 / math.Sqrt(float64(len2)))
+				// Perpendicular in screen space, scaled to half the
+				// stroke width. Rotating (dx, dy) by +90° gives
+				// (-dy, dx); multiply by halfW/|d|.
+				px := -dy * inv * halfW
+				py := dx * inv * halfW
+				d.quads = append(d.quads, segmentQuad{
+					v0:   makeQuadVertex(ax+px, ay+py, cr, cg, cb),
+					v1:   makeQuadVertex(ax-px, ay-py, cr, cg, cb),
+					v2:   makeQuadVertex(bx-px, by-py, cr, cg, cb),
+					v3:   makeQuadVertex(bx+px, by+py, cr, cg, cb),
+					avgZ: (pa.ViewZ + pb.ViewZ) * 0.5,
+				})
 			}
 		}
-		for b := roleBucket(0); b < numRoleBuckets; b++ {
-			if !anyBucket[b] {
-				continue
-			}
-			vector.StrokePath(dst, &d.rolePaths[b], &strokeOpts[b], &drawOpts[b])
+	}
+
+	if len(d.quads) == 0 {
+		return
+	}
+
+	// Painter's algorithm: most-negative ViewZ first (furthest from
+	// camera) so nearer segments paint over them. Identical scheme to
+	// the mesh rasterizer.
+	sort.Slice(d.quads, func(i, j int) bool {
+		return d.quads[i].avgZ < d.quads[j].avgZ
+	})
+
+	// uint16 indices cap at 65535: 6 indices per quad → 10922 quads
+	// per draw call. For a Wind-Turbine-class slice (~90k segments)
+	// that means ~9 DrawTriangles calls per frame, still trivial.
+	const quadsPerBatch = 65535 / 6
+	for start := 0; start < len(d.quads); start += quadsPerBatch {
+		end := start + quadsPerBatch
+		if end > len(d.quads) {
+			end = len(d.quads)
 		}
+		d.emitBatch(dst, d.quads[start:end])
 	}
 }
 
-type projected2 struct {
-	sx, sy float32
-	ok     bool
+// emitBatch packs the given quads into Vertex / index buffers and
+// issues a single DrawTriangles call. Buffers are stored on the
+// receiver so consecutive frames reuse the same backing array.
+func (d *ToolpathDrawer) emitBatch(dst *ebiten.Image, quads []segmentQuad) {
+	n := len(quads)
+	vNeed := n * 4
+	iNeed := n * 6
+	if cap(d.verts) < vNeed {
+		d.verts = make([]ebiten.Vertex, vNeed)
+	} else {
+		d.verts = d.verts[:vNeed]
+	}
+	if cap(d.indices) < iNeed {
+		d.indices = make([]uint16, iNeed)
+	} else {
+		d.indices = d.indices[:iNeed]
+	}
+	for i, q := range quads {
+		vb := i * 4
+		ib := i * 6
+		d.verts[vb] = q.v0
+		d.verts[vb+1] = q.v1
+		d.verts[vb+2] = q.v2
+		d.verts[vb+3] = q.v3
+		// Two triangles: 0-1-2 and 0-2-3.
+		d.indices[ib] = uint16(vb)
+		d.indices[ib+1] = uint16(vb + 1)
+		d.indices[ib+2] = uint16(vb + 2)
+		d.indices[ib+3] = uint16(vb)
+		d.indices[ib+4] = uint16(vb + 2)
+		d.indices[ib+5] = uint16(vb + 3)
+	}
+	dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
 }
 
-func project(cam *Camera, z float64, p slice.Point2, aspect, x0, y0, fw, fh float32) projected2 {
-	w := mesh.Vec3{float32(p.X), float32(p.Y), float32(z)}
-	pr := cam.Project(w, aspect)
-	if !pr.InFront {
-		return projected2{}
-	}
-	return projected2{
-		sx: x0 + (pr.X+1)*0.5*fw,
-		sy: y0 + (1-(pr.Y+1)*0.5)*fh,
-		ok: true,
+// makeQuadVertex constructs an Ebitengine vertex at the given screen
+// coordinate carrying the role's solid colour. The texture sample is
+// fixed at (0, 0) of the 1×1 white image so the per-vertex ColorR/G/B
+// channels show through unmodulated.
+func makeQuadVertex(sx, sy, cr, cg, cb float32) ebiten.Vertex {
+	return ebiten.Vertex{
+		DstX:   sx,
+		DstY:   sy,
+		SrcX:   0,
+		SrcY:   0,
+		ColorR: cr,
+		ColorG: cg,
+		ColorB: cb,
+		ColorA: 1,
 	}
 }
