@@ -131,3 +131,28 @@ func (s *Scene) TriangleCount() int {
 	}
 	return n
 }
+
+// Translate moves every triangle in every object by v and refreshes
+// each object's bounds. Used to place a freshly-loaded scene on the
+// build plate so the viewer shows the model where the slicer will
+// produce gcode; without this step the mesh sits at its file-native
+// coordinates while toolpaths come out in build-plate coordinates and
+// the two views don't line up.
+func (s *Scene) Translate(v Vec3) {
+	for oi := range s.Objects {
+		m := &s.Objects[oi].Mesh
+		for ti := range m.Triangles {
+			for vi := 0; vi < 3; vi++ {
+				m.Triangles[ti].Vertices[vi][0] += v[0]
+				m.Triangles[ti].Vertices[vi][1] += v[1]
+				m.Triangles[ti].Vertices[vi][2] += v[2]
+			}
+		}
+		m.Bounds.Min[0] += v[0]
+		m.Bounds.Min[1] += v[1]
+		m.Bounds.Min[2] += v[2]
+		m.Bounds.Max[0] += v[0]
+		m.Bounds.Max[1] += v[1]
+		m.Bounds.Max[2] += v[2]
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
 
+	"github.com/lestrrat-go/makislicer/internal/config"
 	"github.com/lestrrat-go/makislicer/internal/gcode"
 	"github.com/lestrrat-go/makislicer/internal/mesh"
 	"github.com/lestrrat-go/makislicer/internal/project"
@@ -200,6 +201,12 @@ func (r *Root) flushPending() {
 		slog.Error("load failed", "path", path, "err", err)
 		return
 	}
+	// Place the scene on the build plate up-front so the viewer and the
+	// slicer share one coordinate system. Without this the viewer shows
+	// the model in its file-native location while the slicer (via
+	// [project.Project.AutoArrange]) operates on a bed-centred copy, and
+	// the toolpath preview ends up offset from the visible mesh.
+	placeSceneOnBed(scene, config.DefaultPrinter())
 	b := scene.Bounds()
 	slog.Info("loaded scene",
 		"path", path,
@@ -217,6 +224,24 @@ func (r *Root) flushPending() {
 	// New mesh → discard any previously-cached slicer state.
 	r.project = nil
 	r.lastLayers = nil
+}
+
+// placeSceneOnBed translates every triangle in the scene so its
+// minimum Z lands on 0 (bed level) and its XY footprint is centred on
+// the printer's build area. Mutates the scene in place. The fallback
+// when the scene has no triangles (or no bounds) is a no-op.
+func placeSceneOnBed(s *mesh.Scene, printer config.Printer) {
+	b := s.Bounds()
+	if b.Empty() {
+		return
+	}
+	cx := (b.Min[0] + b.Max[0]) * 0.5
+	cy := (b.Min[1] + b.Max[1]) * 0.5
+	s.Translate(mesh.Vec3{
+		float32(printer.BedSizeX*0.5) - cx,
+		float32(printer.BedSizeY*0.5) - cy,
+		-b.Min[2],
+	})
 }
 
 // runSlice builds a [project.Project] from the currently-loaded scene
