@@ -56,15 +56,65 @@ type LegendEntry struct {
 // camera so the user can swap between mesh and toolpaths without losing
 // orbit / pan state.
 //
-// Drawing is straight ebiten.vector.StrokeLine per segment; for an MVP
-// with O(10k) paths this is well within frame budget, and switching to
-// a batched line-mesh later is a contained change.
+// Each visible path is appended into a [vector.Path] bucketed by role,
+// then the four buckets are stroked once per layer. That keeps Z-order
+// overdraw correct (lower layers first) while collapsing what used to
+// be one [vector.StrokeLine] call per segment into one [vector.StrokePath]
+// call per (layer, role) — a 1-to-2-order-of-magnitude reduction in
+// per-frame overhead for typical Benchy/Wind-Turbine slices.
 type ToolpathDrawer struct {
 	// LineWidthPx is the preview stroke thickness in pixels. Real
 	// extrusion width is layer-dependent and the path knows its true
 	// mm width; for the preview we use a constant pixel width because
 	// it reads better at any zoom level.
 	LineWidthPx float32
+
+	// rolePaths is one [vector.Path] per role bucket. Kept on the drawer
+	// so the underlying segment storage is reused across frames; each
+	// bucket is Reset() at the start of every layer's pass.
+	rolePaths [numRoleBuckets]vector.Path
+}
+
+// roleBucket indexes ToolpathDrawer.rolePaths. The order here also
+// dictates draw order within a layer: outer walls go down first, then
+// inner walls, then sparse infill, then solid infill, mirroring how
+// the slicer emitted them. Keep this in sync with [bucketForRole].
+type roleBucket int
+
+const (
+	bucketExternalPerimeter roleBucket = iota
+	bucketPerimeter
+	bucketInfill
+	bucketSolidInfill
+	numRoleBuckets
+)
+
+func bucketForRole(r slice.PathRole) (roleBucket, bool) {
+	switch r {
+	case slice.RoleExternalPerimeter:
+		return bucketExternalPerimeter, true
+	case slice.RolePerimeter:
+		return bucketPerimeter, true
+	case slice.RoleInfill:
+		return bucketInfill, true
+	case slice.RoleSolidInfill:
+		return bucketSolidInfill, true
+	}
+	return 0, false
+}
+
+func roleForBucket(b roleBucket) slice.PathRole {
+	switch b {
+	case bucketExternalPerimeter:
+		return slice.RoleExternalPerimeter
+	case bucketPerimeter:
+		return slice.RolePerimeter
+	case bucketInfill:
+		return slice.RoleInfill
+	case bucketSolidInfill:
+		return slice.RoleSolidInfill
+	}
+	return slice.RoleTravel
 }
 
 // NewToolpathDrawer returns a drawer with a 1.5px stroke. Callers can
@@ -93,6 +143,12 @@ func roleStrokeWidth(base float32, r slice.PathRole) float32 {
 // strokes each segment. Layers are drawn in Z order (bottom up) so
 // upper layers paint over lower ones — a cheap approximation of depth
 // that works because adjacent layers' paths almost never overlap.
+//
+// Within a layer all paths are first bucketed by role into a single
+// [vector.Path] each, then each non-empty bucket is stroked with one
+// [vector.StrokePath] call. The bucket order — outer → inner → sparse
+// → solid — matches the slicer's emit order, so a Benchy's outer walls
+// still sit on top of the infill that lives under them.
 func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, layers []slice.Layer, cam *Camera) {
 	w := dstBounds.Dx()
 	h := dstBounds.Dy()
@@ -105,30 +161,75 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 	fw := float32(w)
 	fh := float32(h)
 
+	strokeOpts := [numRoleBuckets]vector.StrokeOptions{}
+	for b := roleBucket(0); b < numRoleBuckets; b++ {
+		strokeOpts[b] = vector.StrokeOptions{
+			Width:      roleStrokeWidth(d.LineWidthPx, roleForBucket(b)),
+			LineJoin:   vector.LineJoinBevel,
+			MiterLimit: 4,
+		}
+	}
+	drawOpts := [numRoleBuckets]vector.DrawPathOptions{}
+	for b := roleBucket(0); b < numRoleBuckets; b++ {
+		drawOpts[b] = vector.DrawPathOptions{}
+		drawOpts[b].ColorScale.ScaleWithColor(RoleColor(roleForBucket(b)))
+	}
+
 	for li := range layers {
-		z := float32(layers[li].Z)
+		for b := range d.rolePaths {
+			d.rolePaths[b].Reset()
+		}
+		anyBucket := [numRoleBuckets]bool{}
+		layerZ := layers[li].Z
 		for _, p := range layers[li].Paths {
 			if !p.Role.IsExtrusion() || len(p.Points) < 2 {
 				continue
 			}
-			c := RoleColor(p.Role)
-			sw := roleStrokeWidth(d.LineWidthPx, p.Role)
-			prev := project(cam, layers[li].Z, p.Points[0], aspect, x0, y0, fw, fh)
-			for i := 1; i < len(p.Points); i++ {
-				cur := project(cam, layers[li].Z, p.Points[i], aspect, x0, y0, fw, fh)
-				if prev.ok && cur.ok {
-					vector.StrokeLine(dst, prev.sx, prev.sy, cur.sx, cur.sy, sw, c, false)
-				}
-				prev = cur
+			b, ok := bucketForRole(p.Role)
+			if !ok {
+				continue
 			}
-			if p.Closed && len(p.Points) >= 2 {
-				cur := project(cam, layers[li].Z, p.Points[0], aspect, x0, y0, fw, fh)
-				if prev.ok && cur.ok {
-					vector.StrokeLine(dst, prev.sx, prev.sy, cur.sx, cur.sy, sw, c, false)
+			path := &d.rolePaths[b]
+			subStarted := false
+			firstOK := false
+			var firstSx, firstSy float32
+			for i, pt := range p.Points {
+				pr := project(cam, layerZ, pt, aspect, x0, y0, fw, fh)
+				if !pr.ok {
+					// Vertex behind the camera — break the polyline.
+					// A later in-front vertex will start a fresh sub-path.
+					subStarted = false
+					continue
 				}
+				if i == 0 {
+					firstSx, firstSy = pr.sx, pr.sy
+					firstOK = true
+				}
+				if !subStarted {
+					path.MoveTo(pr.sx, pr.sy)
+					subStarted = true
+				} else {
+					path.LineTo(pr.sx, pr.sy)
+				}
+				anyBucket[b] = true
+			}
+			// Close the loop manually rather than using Path.Close:
+			// Close only joins the current sub-path to its MoveTo, but
+			// if any vertex went behind the camera we may have emitted
+			// multiple sub-paths and want the seam to land back at the
+			// original first vertex specifically. Skip when either the
+			// first vertex was never in front, or the closing edge
+			// would dangle from a broken sub-path.
+			if p.Closed && subStarted && firstOK {
+				path.LineTo(firstSx, firstSy)
 			}
 		}
-		_ = z
+		for b := roleBucket(0); b < numRoleBuckets; b++ {
+			if !anyBucket[b] {
+				continue
+			}
+			vector.StrokePath(dst, &d.rolePaths[b], &strokeOpts[b], &drawOpts[b])
+		}
 	}
 }
 
