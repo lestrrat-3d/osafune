@@ -73,6 +73,15 @@ type Root struct {
 	project    *project.Project
 	lastLayers []slice.Layer
 
+	// slicing tracks whether a background slice goroutine is in flight.
+	// Read and written from the UI thread only (the goroutine itself
+	// never touches this field); subsequent Slice clicks are dropped
+	// while it is true. sliceCh is a 1-slot mailbox the background
+	// goroutine drops the finished slice into; Build drains it on the
+	// next pass and clears slicing.
+	slicing bool
+	sliceCh chan sliceResult
+
 	toolbarItems []guigui.LinearLayoutItem
 	bodyItems    []guigui.LinearLayoutItem
 	rootItems    []guigui.LinearLayoutItem
@@ -94,6 +103,7 @@ func NewRoot(opener FileOpener, saver FileSaver, initialPath string) *Root {
 		initialPath:      initialPath,
 		infillPattern:    defaults.InfillPattern,
 		infillDensityPct: int(defaults.InfillDensity * 100),
+		sliceCh:          make(chan sliceResult, 1),
 	}
 }
 
@@ -167,7 +177,10 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	r.sliceButton.OnUp(func(context *guigui.Context) {
 		r.runSlice()
 	})
-	context.SetEnabled(&r.sliceButton, r.project != nil || r.viewport.scene != nil)
+	// Disable while a slice is in flight so a second click can't queue
+	// up behind the first. The background goroutine flips this off via
+	// the sliceCh drain below.
+	context.SetEnabled(&r.sliceButton, !r.slicing && (r.project != nil || r.viewport.scene != nil))
 
 	r.meshButton.SetText("Show Mesh")
 	r.meshButton.OnUp(func(context *guigui.Context) {
@@ -187,6 +200,7 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.initialPath = ""
 	}
 	r.flushPending()
+	r.drainSliceResult()
 
 	return nil
 }
@@ -303,41 +317,83 @@ func placeSceneOnBed(s *mesh.Scene, printer config.Printer) {
 	})
 }
 
-// runSlice builds a [project.Project] from the currently-loaded scene
-// and runs the slicer end-to-end. The result is cached on the Root so
-// the Save Gcode button can write it out without reslicing. The viewer
-// switches to toolpath preview when this succeeds.
+// sliceResult is the payload the background slice goroutine hands back
+// to the UI thread via Root.sliceCh. The scene pointer is the one the
+// goroutine sliced from: if a fresh mesh has been loaded in the
+// meantime drainSliceResult uses it to discard the stale output rather
+// than overwriting the new scene's state.
+type sliceResult struct {
+	scene   *mesh.Scene
+	project *project.Project
+	layers  []slice.Layer
+}
+
+// runSlice kicks off a background slice of the currently-loaded scene
+// and returns immediately. The actual slicing — perimeters, infill,
+// the lot — runs on a goroutine so the UI keeps rendering and the user
+// can still orbit the camera while a big model crunches. Subsequent
+// clicks are dropped while a slice is in flight; the Slice button is
+// also disabled in Build() so this should never trigger in normal use.
 //
-// Slicing runs synchronously on the UI thread. For the meshes the MVP
-// targets (Benchy / Wind Turbine class) this is fast enough that a
-// frame skip is invisible; a background goroutine is the obvious
-// follow-up when bigger models start to lag.
+// The goroutine doesn't touch any Root fields directly — it ships the
+// finished slice through r.sliceCh, and Build()'s drainSliceResult
+// applies the result on the UI thread on the next frame. That keeps
+// guigui's widget state owned by a single goroutine.
 func (r *Root) runSlice() {
-	if r.viewport.scene == nil {
+	if r.slicing || r.viewport.scene == nil {
 		return
 	}
-	proj := project.NewFromScene(r.viewport.scene)
-	plate := &proj.Plates[0]
-	// Apply the toolbar's pattern + density choices on top of the
-	// default process before slicing.
-	plate.Process.InfillPattern = r.infillPattern
-	plate.Process.InfillDensity = float64(r.infillDensityPct) / 100.0
-	m := proj.PlateMesh(0)
-	layers := slice.Slice(&m, &plate.Printer, &plate.Process)
-	if len(layers) == 0 {
-		slog.Warn("slicer produced no layers")
-		return
+	// Snapshot the inputs at click time so a later toolbar tweak
+	// doesn't change what gets sliced mid-run.
+	scene := r.viewport.scene
+	pattern := r.infillPattern
+	densityPct := r.infillDensityPct
+	r.slicing = true
+	go func() {
+		proj := project.NewFromScene(scene)
+		plate := &proj.Plates[0]
+		plate.Process.InfillPattern = pattern
+		plate.Process.InfillDensity = float64(densityPct) / 100.0
+		m := proj.PlateMesh(0)
+		layers := slice.Slice(&m, &plate.Printer, &plate.Process)
+		// Buffered, 1-slot, and slicing gate prevents concurrent
+		// senders — this send is non-blocking in practice.
+		r.sliceCh <- sliceResult{scene: scene, project: proj, layers: layers}
+		guigui.RequestRebuild(r)
+	}()
+}
+
+// drainSliceResult picks up the output of any background slice that
+// has finished since the last Build pass and applies it to the widget
+// tree. Called from Build so all widget mutation happens on the UI
+// thread.
+func (r *Root) drainSliceResult() {
+	select {
+	case res := <-r.sliceCh:
+		r.slicing = false
+		if res.scene != r.viewport.scene {
+			// A new mesh was loaded between the click and the slice
+			// completing — the result belongs to a scene that is no
+			// longer on screen. Drop it.
+			slog.Info("discarding slice result for stale scene")
+			return
+		}
+		if len(res.layers) == 0 {
+			slog.Warn("slicer produced no layers")
+			return
+		}
+		r.project = res.project
+		r.lastLayers = res.layers
+		r.viewport.SetLayers(res.layers)
+		r.layerSlider.SetRange(0, len(res.layers)-1)
+		r.layerSlider.SetValues(0, len(res.layers)-1)
+		var paths int
+		for _, l := range res.layers {
+			paths += len(l.Paths)
+		}
+		slog.Info("sliced", "layers", len(res.layers), "paths", paths)
+	default:
 	}
-	r.project = proj
-	r.lastLayers = layers
-	r.viewport.SetLayers(layers)
-	r.layerSlider.SetRange(0, len(layers)-1)
-	r.layerSlider.SetValues(0, len(layers)-1)
-	var paths int
-	for _, l := range layers {
-		paths += len(l.Paths)
-	}
-	slog.Info("sliced", "layers", len(layers), "paths", paths)
 }
 
 // saveGcode prompts the user for an output path via the [FileSaver],
