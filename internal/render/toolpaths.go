@@ -52,92 +52,105 @@ type LegendEntry struct {
 	Label string
 }
 
-// tubeSides is the number of facets around each extrusion segment's
-// elliptical cross-section. Eight is the lowest count that reads as
-// "round" rather than "polygonal" at typical viewing distances; bump
-// it for prettier previews at the cost of proportional CPU work.
-const tubeSides = 8
-
-// Precomputed unit-circle samples for the cross-section corners and
-// for the midpoints between adjacent corners (used to derive face
-// normals). Filled in by init().
-var (
-	tubeCos [tubeSides]float32 // cos at corner k
-	tubeSin [tubeSides]float32 // sin at corner k
-	// midCos/midSin give the direction of the inward-of-the-arc
-	// midpoint between corner k and corner k+1 — i.e. the direction
-	// the k-th face's outward normal points to before being mapped
-	// into world space.
-	tubeMidCos [tubeSides]float32
-	tubeMidSin [tubeSides]float32
-)
-
-func init() {
-	for k := 0; k < tubeSides; k++ {
-		theta := 2 * math.Pi * float64(k) / float64(tubeSides)
-		tubeCos[k] = float32(math.Cos(theta))
-		tubeSin[k] = float32(math.Sin(theta))
-		mid := 2 * math.Pi * (float64(k) + 0.5) / float64(tubeSides)
-		tubeMidCos[k] = float32(math.Cos(mid))
-		tubeMidSin[k] = float32(math.Sin(mid))
-	}
-}
-
-// ToolpathDrawer renders sliced layers as round tube-shaped extrusion
-// segments — each segment is a world-space prism with an elliptical
-// cross-section of (Path.Width × Layer.Height), projected through the
-// camera and painter-sorted in view space. The elliptical profile
-// matches what a real squashed-extrusion plastic bead looks like:
-// wider than tall (the nozzle squashes it against the layer below),
-// and just touching the neighbours on every side.
+// ToolpathDrawer renders sliced layers using the same billboard trick
+// OrcaSlicer's GCode viewer uses (see libvgcode/SegmentTemplate.cpp +
+// Shaders.hpp in the upstream OrcaSlicer source): each extrusion
+// segment is an 8-vertex / 8-triangle camera-facing ribbon with a
+// boat-shaped silhouette — three "ring" corners (top, near side,
+// bottom) at each endpoint plus a pointed spike that extends along
+// the line direction. The spike hides the join between consecutive
+// segments along a path; the camera-facing flip keeps the ribbon
+// presenting its broad face to the viewer from any angle.
 //
-// Back-facing facets are culled in the world-space pass; the visible
-// front facets of a convex segment cannot overlap each other in
-// screen space, so they may be emitted in any order within a segment.
-// Across segments, a per-segment painter sort handles inter-segment
-// occlusion. End caps are intentionally omitted: adjacent segments
-// along a path share endpoints, and caps would just interpenetrate
-// without adding visual value.
+// The 3D illusion comes from per-vertex Lambertian shading using a
+// normal derived from (vertex - endpoint), interpolated across the
+// triangle. The top corner is lit, the bottom is dark, sides fall
+// in between — same trick the OrcaSlicer GPU shader uses, just done
+// CPU-side because ebiten doesn't expose programmable vertex shaders.
 type ToolpathDrawer struct {
 	// LightDir is the unit direction the virtual key light shines
 	// toward. Same convention as the mesh rasterizer's LightDir
 	// (shade = ambient + (1-ambient) · max(0, n · -LightDir)).
 	LightDir mesh.Vec3
 
-	// AmbientFactor in [0, 1] keeps the shadow-side of tubes
-	// readable rather than going to black.
+	// AmbientFactor in [0, 1] keeps the shadow side of a segment
+	// readable rather than going to pure black.
 	AmbientFactor float32
 
-	// LineWidthPx is retained for backwards compatibility but no
-	// longer has any effect on this volumetric renderer.
+	// LineWidthPx is retained on the struct so existing callers that
+	// assign to it continue to compile; the volumetric billboard
+	// renderer does not consult it any more (extrusion width comes
+	// straight from each [slice.Path]'s mm-space Width field).
 	LineWidthPx float32
 
 	// Scratch buffers reused across frames.
-	segs    []segmentRecord
+	segs    []segmentBillboard
 	verts   []ebiten.Vertex
 	indices []uint16
 }
 
-// segmentRecord caches the per-segment geometry the emit phase needs:
-// the 2·tubeSides projected cross-section corners (one ring at each
-// endpoint), the perpendicular direction in XY that the ring is
-// parameterised against, the base role colour, and the painter-sort
-// key (segment-centre view Z).
-type segmentRecord struct {
-	aProj [tubeSides]Projected
-	bProj [tubeSides]Projected
-	rX    float32
-	rY    float32
-	baseR float32
-	baseG float32
-	baseB float32
+// segmentBillboard caches one segment's 8 finished screen-space
+// vertices plus the painter-sort depth key (mean view Z of the eight
+// corners). Generated in the per-frame projection pass and consumed,
+// in sorted order, by the emit pass.
+type segmentBillboard struct {
+	verts [segmentVertexCount]ebiten.Vertex
 	avgZ  float32
 }
 
-// NewToolpathDrawer returns a drawer using the same key light /
-// ambient settings as the mesh rasterizer, so the toolpath preview's
-// shading reads consistently when the user toggles between mesh and
-// toolpath modes.
+// segmentVertexCount is the per-segment vertex count of OrcaSlicer's
+// template. Eight vertices, eight triangles — see segmentTriangles.
+const segmentVertexCount = 8
+
+// segmentTriangles is the index pattern from
+// libvgcode/SegmentTemplate.cpp (VERTEX_DATA). Eight triangles: two
+// front-spike fans, four body, two back-spike fans. Indices here are
+// the local 0–7 offsets; the emit loop adds the segment's base
+// vertex index to each.
+var segmentTriangles = [8][3]uint16{
+	{0, 1, 2}, // front spike
+	{0, 2, 3}, // front spike
+	{0, 3, 4}, // right/bottom body
+	{0, 4, 5}, // right/bottom body
+	{0, 5, 6}, // left/top body
+	{0, 6, 1}, // left/top body
+	{5, 4, 7}, // back spike
+	{5, 7, 6}, // back spike
+}
+
+// horizontalViewSigns / verticalViewSigns are the
+// horizontal_vertical_view_signs_array constants from the OrcaSlicer
+// vertex shader (libvgcode/Shaders.hpp). Each pair is (right_sign,
+// up_sign): the multipliers applied to halfWidth·lineRight and
+// halfHeight·lineUp when placing a vertex relative to its endpoint.
+// Vertex ids 2 and 7 sit at the endpoint itself (signs 0,0) and get
+// extended into a spike along ±lineDir by the geometry pass.
+var (
+	horizontalViewSigns = [segmentVertexCount][2]float32{
+		{1, 0},
+		{0, 1},
+		{0, 0},
+		{0, -1},
+		{0, -1},
+		{1, 0},
+		{0, 1},
+		{0, 0},
+	}
+	verticalViewSigns = [segmentVertexCount][2]float32{
+		{0, 1},
+		{-1, 0},
+		{0, 0},
+		{1, 0},
+		{1, 0},
+		{0, 1},
+		{-1, 0},
+		{0, 0},
+	}
+)
+
+// NewToolpathDrawer returns a drawer with the same key-light / ambient
+// values as the mesh rasterizer, so the toolpath preview and the mesh
+// preview shade consistently when the user toggles between them.
 func NewToolpathDrawer() *ToolpathDrawer {
 	return &ToolpathDrawer{
 		LightDir:      normalize(mesh.Vec3{-0.4, -0.5, -0.8}),
@@ -147,19 +160,23 @@ func NewToolpathDrawer() *ToolpathDrawer {
 }
 
 // minExtrusionWidth and minLayerHeight clamp degenerate path metadata
-// so a zero-width path never produces a sliver tube that disappears
-// at certain angles.
+// so a zero-dimensioned path can't produce a sliver billboard that
+// disappears or projects to NaN at edge-on viewing angles.
 const (
 	minExtrusionWidth = 0.05 // mm
 	minLayerHeight    = 0.05 // mm
 )
 
-// Draw is the renderer entry point — see [ToolpathDrawer] for the
-// high-level algorithm. Each frame: collect per-segment records,
-// reject any segment whose cross-section pokes behind the near plane,
-// sort the survivors by view-space depth, then emit front-facing
-// facets in sorted segment order into a single index buffer that's
-// chunked at the uint16 cap.
+// worldUp is the slicer's Z-up convention. line_up direction
+// degenerates to this for any segment lying in an XY plane, which is
+// the only kind of segment our planar slicer emits — but the cross-
+// product fallback below also handles a hypothetical vertical move.
+var worldUp = mesh.Vec3{0, 0, 1}
+
+// Draw is the renderer entry point. For each extrusion segment in
+// layers it computes 8 screen-space vertices (the OrcaSlicer ribbon
+// template), painter-sorts segments by mean view Z, and ships them
+// through ebiten.DrawTriangles batched at the uint16 index cap.
 func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, layers []slice.Layer, cam *Camera) {
 	w := dstBounds.Dx()
 	h := dstBounds.Dy()
@@ -172,6 +189,8 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 	fw := float32(w)
 	fh := float32(h)
 
+	eye, _, _, _ := cam.Basis()
+
 	d.segs = d.segs[:0]
 
 	for li := range layers {
@@ -181,10 +200,10 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 			layerH = minLayerHeight
 		}
 		halfH := layerH * 0.5
-		// Layer.Z is the top of the layer; the printed bead occupies
-		// [Z-Height, Z]. Centring the cross-section on the layer
-		// midpoint makes adjacent layers' tubes meet at exactly the
-		// layer boundary.
+		// Layer.Z is the top of the layer; the bead occupies
+		// [Z-Height, Z]. Centring the billboard on the midpoint
+		// makes adjacent layers' geometry meet at the exact layer
+		// boundary so they appear continuous in Z.
 		centerZ := float32(layer.Z) - halfH
 
 		for _, p := range layer.Paths {
@@ -210,57 +229,12 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 			for i := 0; i < segs; i++ {
 				a := p.Points[i]
 				b := p.Points[(i+1)%n]
-				ax := float32(a.X)
-				ay := float32(a.Y)
-				bx := float32(b.X)
-				by := float32(b.Y)
-				dx := bx - ax
-				dy := by - ay
-				len2 := dx*dx + dy*dy
-				if len2 < 1e-12 {
-					continue
+				posA := mesh.Vec3{float32(a.X), float32(a.Y), centerZ}
+				posB := mesh.Vec3{float32(b.X), float32(b.Y), centerZ}
+				if rec, ok := d.buildSegment(cam, eye, aspect, x0, y0, fw, fh,
+					posA, posB, halfW, halfH, baseR, baseG, baseB); ok {
+					d.segs = append(d.segs, rec)
 				}
-				inv := float32(1.0 / math.Sqrt(float64(len2)))
-				// Right-hand perpendicular to segment in XY (unit).
-				rX := -dy * inv
-				rY := dx * inv
-
-				rec := segmentRecord{
-					rX:    rX,
-					rY:    rY,
-					baseR: baseR,
-					baseG: baseG,
-					baseB: baseB,
-				}
-
-				allInFront := true
-				var sumAZ, sumBZ float32
-				for k := 0; k < tubeSides; k++ {
-					c := tubeCos[k]
-					s := tubeSin[k]
-					ox := rX * c * halfW
-					oy := rY * c * halfW
-					oz := s * halfH
-					pa := cam.Project(mesh.Vec3{ax + ox, ay + oy, centerZ + oz}, aspect)
-					pb := cam.Project(mesh.Vec3{bx + ox, by + oy, centerZ + oz}, aspect)
-					rec.aProj[k] = pa
-					rec.bProj[k] = pb
-					if !pa.InFront || !pb.InFront {
-						allInFront = false
-						break
-					}
-					sumAZ += pa.ViewZ
-					sumBZ += pb.ViewZ
-				}
-				if !allInFront {
-					// Any vertex behind the near plane → drop the
-					// whole tube. Robust near-plane clipping is a
-					// follow-up; the bounding-box-fit camera keeps
-					// the print in front in normal use.
-					continue
-				}
-				rec.avgZ = (sumAZ + sumBZ) / (2 * tubeSides)
-				d.segs = append(d.segs, rec)
 			}
 		}
 	}
@@ -269,108 +243,253 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 		return
 	}
 
-	// Painter sort by segment centre: most-negative view Z (furthest
-	// from camera) first, so nearer tubes overdraw them.
+	// Painter sort: furthest segment first (most-negative view Z),
+	// nearer segments overdraw them.
 	sort.Slice(d.segs, func(i, j int) bool {
 		return d.segs[i].avgZ < d.segs[j].avgZ
 	})
 
-	d.emitSegments(dst, x0, y0, fw, fh)
+	d.emit(dst)
 }
 
-// emitSegments walks the segment list in painter-sorted order,
-// builds each segment's front-facing facets into the shared vertex /
-// index buffer, and flushes via DrawTriangles each time we'd
-// otherwise exceed the uint16 index cap.
-//
-// Backface culling is done in screen space via the signed area of
-// the projected quad: a back-facing facet's corners wind opposite to
-// a front-facing one's, so the cross-product of the two diagonals
-// flips sign. That's both cheaper than reconstructing world-space
-// coords for an eye-vs-facet dot product, and correct under
-// perspective projection.
-func (d *ToolpathDrawer) emitSegments(dst *ebiten.Image, x0, y0, fw, fh float32) {
-	const quadsPerBatch = 65535 / 6 // 6 indices per quad
+// buildSegment computes the eight projected vertices for one segment
+// and returns false when any of them lands behind the near plane.
+// Walking through the OrcaSlicer vertex shader: pick the
+// horizontal-or-vertical sign table based on the camera direction
+// relative to the segment's cross-section diagonal, place each
+// vertex at endpoint + signs·half-axis, extend ids 2 & 7 along the
+// line direction to form the spike caps, then shade per-vertex
+// using normalize(pos - endpoint) as a fake smooth normal.
+func (d *ToolpathDrawer) buildSegment(
+	cam *Camera, eye mesh.Vec3, aspect float32,
+	x0, y0, fw, fh float32,
+	posA, posB mesh.Vec3,
+	halfW, halfH float32,
+	baseR, baseG, baseB float32,
+) (segmentBillboard, bool) {
+	lineX := posB[0] - posA[0]
+	lineY := posB[1] - posA[1]
+	lineZ := posB[2] - posA[2]
+	lineLen := float32(math.Sqrt(float64(lineX*lineX + lineY*lineY + lineZ*lineZ)))
+	if lineLen < 1e-6 {
+		return segmentBillboard{}, false
+	}
+	lineDir := mesh.Vec3{lineX / lineLen, lineY / lineLen, lineZ / lineLen}
+
+	// line_right ⟂ line_dir in (roughly) the XY plane. For a
+	// nearly-vertical line, fall back to a fixed reference axis the
+	// way the OrcaSlicer shader does.
+	var lineRight mesh.Vec3
+	if absF(dot3(lineDir, worldUp)) > 0.9 {
+		lineRight = norm3(cross3(mesh.Vec3{1, 0, 0}, lineDir))
+	} else {
+		lineRight = norm3(cross3(lineDir, worldUp))
+	}
+	lineUp := norm3(cross3(lineRight, lineDir))
+
+	// diagonal_dir_border = unit vector at angle atan2(W, H) in the
+	// (line_right, line_up) plane scaled by the cross-section's
+	// half-extents. Used as the "tilt" reference for the
+	// horizontal-vs-vertical view test.
+	diagX := halfH*2*lineUp[0] + halfW*2*lineRight[0]
+	diagY := halfH*2*lineUp[1] + halfW*2*lineRight[1]
+	diagZ := halfH*2*lineUp[2] + halfW*2*lineRight[2]
+	diagLen := float32(math.Sqrt(float64(diagX*diagX + diagY*diagY + diagZ*diagZ)))
+	if diagLen < 1e-6 {
+		return segmentBillboard{}, false
+	}
+	diagDir := mesh.Vec3{diagX / diagLen, diagY / diagLen, diagZ / diagLen}
+
+	segCenter := mesh.Vec3{
+		(posA[0] + posB[0]) * 0.5,
+		(posA[1] + posB[1]) * 0.5,
+		(posA[2] + posB[2]) * 0.5,
+	}
+	viewDir := norm3(mesh.Vec3{
+		segCenter[0] - eye[0],
+		segCenter[1] - eye[1],
+		segCenter[2] - eye[2],
+	})
+
+	// Compare camera projection onto line_up vs line_right,
+	// normalised by the diagonal's projection, to pick the
+	// orientation that maximises the billboard's silhouette.
+	denomUp := absF(dot3(diagDir, lineUp))
+	denomRt := absF(dot3(diagDir, lineRight))
+	isVertical := false
+	if denomUp > 1e-6 && denomRt > 1e-6 {
+		isVertical = absF(dot3(viewDir, lineUp))/denomUp >
+			absF(dot3(viewDir, lineRight))/denomRt
+	}
+	signs := &horizontalViewSigns
+	if isVertical {
+		signs = &verticalViewSigns
+	}
+
+	negView := mesh.Vec3{-viewDir[0], -viewDir[1], -viewDir[2]}
+	viewRightSign := signF(dot3(negView, lineRight))
+	viewTopSign := signF(dot3(negView, lineUp))
+	if viewRightSign == 0 {
+		viewRightSign = 1
+	}
+	if viewTopSign == 0 {
+		viewTopSign = 1
+	}
+
+	horizontalDir := mesh.Vec3{lineRight[0] * halfW, lineRight[1] * halfW, lineRight[2] * halfW}
+	verticalDir := mesh.Vec3{lineUp[0] * halfH, lineUp[1] * halfH, lineUp[2] * halfH}
+
+	var out segmentBillboard
+	var sumViewZ float32
+	for vid := 0; vid < segmentVertexCount; vid++ {
+		endpoint := posA
+		if vid >= 4 {
+			endpoint = posB
+		}
+		s := signs[vid]
+		hSign := s[0] * viewRightSign
+		vSign := s[1] * viewTopSign
+
+		pos := mesh.Vec3{
+			endpoint[0] + hSign*horizontalDir[0] + vSign*verticalDir[0],
+			endpoint[1] + hSign*horizontalDir[1] + vSign*verticalDir[1],
+			endpoint[2] + hSign*horizontalDir[2] + vSign*verticalDir[2],
+		}
+		// Spike vertices (ids 2 and 7) are offset along the line
+		// direction so the segment tapers to a point at each end.
+		// Adjacent segments' spikes overlap, which hides the join
+		// without needing the GPU shader's miter math.
+		if vid == 2 || vid == 7 {
+			sign := float32(-1)
+			if vid == 7 {
+				sign = 1
+			}
+			pos[0] += sign * halfW * lineDir[0]
+			pos[1] += sign * halfW * lineDir[1]
+			pos[2] += sign * halfW * lineDir[2]
+		}
+
+		// Fake smooth normal: from the segment axis (endpoint)
+		// outward through the vertex. Matches the OrcaSlicer shader's
+		// `normalize(pos - endpoint_pos)` so the Gouraud-style
+		// gradient across each face reads as a curved tube.
+		nx := pos[0] - endpoint[0]
+		ny := pos[1] - endpoint[1]
+		nz := pos[2] - endpoint[2]
+		nLen := float32(math.Sqrt(float64(nx*nx + ny*ny + nz*nz)))
+		if nLen < 1e-6 {
+			// Spike at endpoint: use line_dir as a stand-in normal
+			// so the spike tip is shaded with the segment-axis
+			// orientation rather than going to zero.
+			sign := float32(-1)
+			if vid == 7 {
+				sign = 1
+			}
+			nx = sign * lineDir[0]
+			ny = sign * lineDir[1]
+			nz = sign * lineDir[2]
+		} else {
+			nx /= nLen
+			ny /= nLen
+			nz /= nLen
+		}
+
+		ndotL := -(nx*d.LightDir[0] + ny*d.LightDir[1] + nz*d.LightDir[2])
+		if ndotL < 0 {
+			ndotL = 0
+		}
+		shade := d.AmbientFactor + (1-d.AmbientFactor)*ndotL
+
+		pr := cam.Project(pos, aspect)
+		if !pr.InFront {
+			// Anything that pokes behind the near plane drops the
+			// whole segment. Robust near-plane clipping is a
+			// follow-up; the bounding-box-fit camera keeps the print
+			// in front in normal use.
+			return segmentBillboard{}, false
+		}
+		out.verts[vid] = ebiten.Vertex{
+			DstX:   x0 + (pr.X+1)*0.5*fw,
+			DstY:   y0 + (1-(pr.Y+1)*0.5)*fh,
+			ColorR: baseR * shade,
+			ColorG: baseG * shade,
+			ColorB: baseB * shade,
+			ColorA: 1,
+		}
+		sumViewZ += pr.ViewZ
+	}
+	out.avgZ = sumViewZ / segmentVertexCount
+	return out, true
+}
+
+// emit walks the segments in painter-sorted order and ships their
+// 8-vertex / 8-triangle templates through DrawTriangles, flushing the
+// shared vertex / index buffer whenever the next segment would push
+// us past the uint16 index cap.
+func (d *ToolpathDrawer) emit(dst *ebiten.Image) {
+	// uint16 cap: 65535 indices. 24 indices per segment → 2730
+	// segments per batch.
+	const segsPerBatch = 65535 / (len(segmentTriangles) * 3)
 
 	d.verts = d.verts[:0]
 	d.indices = d.indices[:0]
-	quadsInBatch := 0
-
+	inBatch := 0
 	for si := range d.segs {
-		seg := &d.segs[si]
-		for k := 0; k < tubeSides; k++ {
-			kn := (k + 1) % tubeSides
-
-			// World-space outward normal of facet k.
-			midC := tubeMidCos[k]
-			midS := tubeMidSin[k]
-			nx := seg.rX * midC
-			ny := seg.rY * midC
-			nz := midS
-			// (rX, rY) is unit in XY, and (midC, midS) sits on the
-			// unit circle, so (nx, ny, nz) is already unit-length —
-			// no normalisation needed.
-
-			pa0 := seg.aProj[k]
-			pa1 := seg.aProj[kn]
-			pb0 := seg.bProj[k]
-			pb1 := seg.bProj[kn]
-
-			sax0 := x0 + (pa0.X+1)*0.5*fw
-			say0 := y0 + (1-(pa0.Y+1)*0.5)*fh
-			sax1 := x0 + (pa1.X+1)*0.5*fw
-			say1 := y0 + (1-(pa1.Y+1)*0.5)*fh
-			sbx1 := x0 + (pb1.X+1)*0.5*fw
-			sby1 := y0 + (1-(pb1.Y+1)*0.5)*fh
-			sbx0 := x0 + (pb0.X+1)*0.5*fw
-			sby0 := y0 + (1-(pb0.Y+1)*0.5)*fh
-
-			// Screen-space signed area of the quad (a0 → a1 → b1 →
-			// b0). Positive means CCW in screen coords with Y-down,
-			// which we use as our "front facing" convention. A
-			// degenerate (zero-area) facet seen edge-on contributes
-			// nothing — skip.
-			area := (sax1-sax0)*(sby0-say0) - (sbx0-sax0)*(say1-say0)
-			if area <= 0 {
-				continue
-			}
-
-			// Lambertian shade. The normal we want here is the
-			// world-space facet normal; shade independent of view.
-			ndotL := -(nx*d.LightDir[0] + ny*d.LightDir[1] + nz*d.LightDir[2])
-			if ndotL < 0 {
-				ndotL = 0
-			}
-			shade := d.AmbientFactor + (1-d.AmbientFactor)*ndotL
-			sR := seg.baseR * shade
-			sG := seg.baseG * shade
-			sB := seg.baseB * shade
-
-			// Flush the current batch if appending one more quad
-			// would push the index buffer past the uint16 cap.
-			if quadsInBatch == quadsPerBatch {
-				dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
-				d.verts = d.verts[:0]
-				d.indices = d.indices[:0]
-				quadsInBatch = 0
-			}
-
-			vb := uint16(len(d.verts))
-			d.verts = append(d.verts,
-				ebiten.Vertex{DstX: sax0, DstY: say0, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
-				ebiten.Vertex{DstX: sax1, DstY: say1, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
-				ebiten.Vertex{DstX: sbx1, DstY: sby1, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
-				ebiten.Vertex{DstX: sbx0, DstY: sby0, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
-			)
-			d.indices = append(d.indices,
-				vb, vb+1, vb+2,
-				vb, vb+2, vb+3,
-			)
-			quadsInBatch++
+		if inBatch == segsPerBatch {
+			dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
+			d.verts = d.verts[:0]
+			d.indices = d.indices[:0]
+			inBatch = 0
 		}
+		base := uint16(len(d.verts))
+		d.verts = append(d.verts, d.segs[si].verts[:]...)
+		for _, t := range segmentTriangles {
+			d.indices = append(d.indices, base+t[0], base+t[1], base+t[2])
+		}
+		inBatch++
 	}
-
-	if quadsInBatch > 0 {
+	if len(d.verts) > 0 {
 		dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
 	}
+}
+
+// Small Vec3 helpers kept local to this file to avoid bloating the
+// mesh package with renderer-specific conveniences. All operate on
+// the package-shared [3]float32 representation.
+
+func dot3(a, b mesh.Vec3) float32 {
+	return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
+}
+
+func cross3(a, b mesh.Vec3) mesh.Vec3 {
+	return mesh.Vec3{
+		a[1]*b[2] - a[2]*b[1],
+		a[2]*b[0] - a[0]*b[2],
+		a[0]*b[1] - a[1]*b[0],
+	}
+}
+
+func norm3(v mesh.Vec3) mesh.Vec3 {
+	l := float32(math.Sqrt(float64(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])))
+	if l < 1e-12 {
+		return mesh.Vec3{}
+	}
+	return mesh.Vec3{v[0] / l, v[1] / l, v[2] / l}
+}
+
+func absF(x float32) float32 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func signF(x float32) float32 {
+	if x > 0 {
+		return 1
+	}
+	if x < 0 {
+		return -1
+	}
+	return 0
 }
