@@ -237,6 +237,12 @@ func (v *Viewport) HandlePointingInput(context *guigui.Context, widgetBounds *gu
 			v.drag = dragPan
 			v.dragButton = ebiten.MouseButtonMiddle
 			v.dragPrev = image.Pt(cx, cy)
+		case inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight):
+			// Right-drag pans, matching most CAD tools. Middle-drag
+			// kept as an alias for users on a trackball/laptop.
+			v.drag = dragPan
+			v.dragButton = ebiten.MouseButtonRight
+			v.dragPrev = image.Pt(cx, cy)
 		}
 	case v.drag != dragNone:
 		// End the drag when the originating button is released. Checking
