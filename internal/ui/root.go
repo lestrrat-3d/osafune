@@ -382,11 +382,23 @@ func (r *Root) drainSliceResult() {
 			slog.Warn("slicer produced no layers")
 			return
 		}
+		// Re-slices keep the user's current layer-range selection so
+		// hitting Slice after a parameter tweak doesn't yank them back
+		// to a full-stack view. First-time slices fall through to the
+		// SetLayers default (show everything).
+		prevLo, prevHi := r.layerSlider.Lower(), r.layerSlider.Upper()
+		reslice := len(r.lastLayers) > 0
+
 		r.project = res.project
 		r.lastLayers = res.layers
 		r.viewport.SetLayers(res.layers)
 		r.layerSlider.SetRange(0, len(res.layers)-1)
-		r.layerSlider.SetValues(0, len(res.layers)-1)
+		if reslice {
+			r.layerSlider.SetValues(prevLo, prevHi)
+			r.viewport.SetLayerRange(r.layerSlider.Lower(), r.layerSlider.Upper())
+		} else {
+			r.layerSlider.SetValues(0, len(res.layers)-1)
+		}
 		var paths int
 		for _, l := range res.layers {
 			paths += len(l.Paths)
