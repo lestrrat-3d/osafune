@@ -36,16 +36,17 @@ type FileOpener interface {
 type Root struct {
 	guigui.DefaultWidget
 
-	background  basicwidget.Background
-	openButton  basicwidget.Button
-	resetButton basicwidget.Button
-	sliceButton basicwidget.Button
-	meshButton  basicwidget.Button
-	saveButton  basicwidget.Button
-	objectPane  ObjectPane
-	viewport    *Viewport
-	opener      FileOpener
-	saver       FileSaver
+	background   basicwidget.Background
+	openButton   basicwidget.Button
+	resetButton  basicwidget.Button
+	sliceButton  basicwidget.Button
+	meshButton   basicwidget.Button
+	saveButton   basicwidget.Button
+	objectPane   ObjectPane
+	viewport     *Viewport
+	layerSlider  LayerRangeSlider
+	opener       FileOpener
+	saver        FileSaver
 
 	// pendingPath, when non-empty, is a path queued for loading on the next
 	// Build pass. Setting it from Build (e.g. from the Open button's OnUp)
@@ -90,6 +91,12 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.saveButton)
 	adder.AddWidget(&r.objectPane)
 	adder.AddWidget(r.viewport)
+	adder.AddWidget(&r.layerSlider)
+	r.layerSlider.OnChanged(func(lo, hi int) {
+		r.viewport.SetLayerRange(lo, hi)
+	})
+	// Slider is meaningful only in toolpath mode with layers loaded.
+	context.SetEnabled(&r.layerSlider, r.viewport.Mode() == ViewToolpaths && r.viewport.LayerCount() > 0)
 
 	r.openButton.SetText("Open…")
 	r.openButton.OnUp(func(context *guigui.Context) {
@@ -162,6 +169,7 @@ func (r *Root) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBounds
 	r.bodyItems = append(r.bodyItems,
 		guigui.LinearLayoutItem{Widget: &r.objectPane, Size: guigui.FixedSize(10 * u)},
 		guigui.LinearLayoutItem{Widget: r.viewport, Size: guigui.FlexibleSize(1)},
+		guigui.LinearLayoutItem{Widget: &r.layerSlider, Size: guigui.FixedSize(2 * u)},
 	)
 	body := guigui.LinearLayout{
 		Direction: guigui.LayoutDirectionHorizontal,
@@ -268,6 +276,8 @@ func (r *Root) runSlice() {
 	r.project = proj
 	r.lastLayers = layers
 	r.viewport.SetLayers(layers)
+	r.layerSlider.SetRange(0, len(layers)-1)
+	r.layerSlider.SetValues(0, len(layers)-1)
 	var paths int
 	for _, l := range layers {
 		paths += len(l.Paths)

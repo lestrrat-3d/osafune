@@ -51,6 +51,11 @@ type Viewport struct {
 	dirty      bool // becomes true when the scene changes; Layout fits the camera on the next pass.
 	background color.NRGBA
 
+	// layerLo/layerHi clip which sliced layers the toolpath previewer
+	// renders. Inclusive bounds; both -1 means "show every layer". The
+	// values are mirrored from the layer-range slider in the toolbar.
+	layerLo, layerHi int
+
 	drag       dragMode
 	dragPrev   image.Point
 	dragButton ebiten.MouseButton
@@ -64,16 +69,45 @@ func NewViewport() *Viewport {
 		raster:     render.New(),
 		toolpaths:  render.NewToolpathDrawer(),
 		background: color.NRGBA{R: 0xdc, G: 0xdc, B: 0xdc, A: 0xff},
+		layerLo:    -1,
+		layerHi:    -1,
 	}
 }
 
 // SetLayers swaps to toolpath-preview mode showing layers. The mesh
 // stays loaded so [Viewport.SetMode] can toggle back without reslicing.
+// The layer-range clip is reset to "show all" so a freshly sliced model
+// is fully visible.
 func (v *Viewport) SetLayers(layers []slice.Layer) {
 	v.layers = layers
+	v.layerLo = 0
+	v.layerHi = len(layers) - 1
 	v.mode = ViewToolpaths
 	guigui.RequestRedraw(v)
 }
+
+// SetLayerRange clips toolpath rendering to layers [lo, hi] inclusive.
+// Out-of-bounds values are clamped to the available layer count.
+func (v *Viewport) SetLayerRange(lo, hi int) {
+	if len(v.layers) == 0 {
+		return
+	}
+	if lo < 0 {
+		lo = 0
+	}
+	if hi >= len(v.layers) {
+		hi = len(v.layers) - 1
+	}
+	if hi < lo {
+		hi = lo
+	}
+	v.layerLo, v.layerHi = lo, hi
+	guigui.RequestRedraw(v)
+}
+
+// LayerCount returns the number of sliced layers currently held by the
+// viewport. Returns 0 when nothing has been sliced yet.
+func (v *Viewport) LayerCount() int { return len(v.layers) }
 
 // SetMode switches between mesh and toolpath rendering. Toolpath mode
 // is a no-op until [Viewport.SetLayers] has been called.
@@ -123,7 +157,11 @@ func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBoun
 	case ViewMesh:
 		v.raster.Draw(dst, b, v.scene, &v.cam)
 	case ViewToolpaths:
-		v.toolpaths.Draw(dst, b, v.layers, &v.cam)
+		layers := v.layers
+		if v.layerLo >= 0 && v.layerHi >= 0 && v.layerHi >= v.layerLo && v.layerHi < len(layers) {
+			layers = layers[v.layerLo : v.layerHi+1]
+		}
+		v.toolpaths.Draw(dst, b, layers, &v.cam)
 	}
 }
 
