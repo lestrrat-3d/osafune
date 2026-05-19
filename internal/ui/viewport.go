@@ -182,8 +182,11 @@ func (v *Viewport) drawLegend(dst *ebiten.Image, viewportBounds image.Rectangle)
 	bgH := pad*2 + row*len(entries)
 	x := viewportBounds.Min.X + pad
 	y := viewportBounds.Min.Y + pad
+	// ebitenutil.DebugPrintAt draws white text and has no colour
+	// parameter; a dark translucent background is the simplest way to
+	// keep the labels readable without pulling in a real font face.
 	vector.DrawFilledRect(dst, float32(x), float32(y), float32(bgW), float32(bgH),
-		color.NRGBA{0xff, 0xff, 0xff, 0xc0}, false)
+		color.NRGBA{0x20, 0x20, 0x20, 0xd0}, false)
 	for i, e := range entries {
 		sy := y + pad + i*row
 		vector.DrawFilledRect(dst,
