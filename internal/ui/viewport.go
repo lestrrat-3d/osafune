@@ -14,6 +14,17 @@ import (
 
 	"github.com/lestrrat-go/makislicer/internal/mesh"
 	"github.com/lestrrat-go/makislicer/internal/render"
+	"github.com/lestrrat-go/makislicer/internal/slice"
+)
+
+// ViewMode selects whether the viewport shows the source mesh or the
+// sliced toolpaths. The mesh and toolpath views share a camera so the
+// user keeps their orbit / pan when switching.
+type ViewMode int
+
+const (
+	ViewMesh ViewMode = iota
+	ViewToolpaths
 )
 
 // dragMode is the kind of camera manipulation in progress.
@@ -32,8 +43,11 @@ type Viewport struct {
 	guigui.DefaultWidget
 
 	scene      *mesh.Scene
+	layers     []slice.Layer
+	mode       ViewMode
 	cam        render.Camera
 	raster     *render.Rasterizer
+	toolpaths  *render.ToolpathDrawer
 	dirty      bool // becomes true when the scene changes; Layout fits the camera on the next pass.
 	background color.NRGBA
 
@@ -48,9 +62,28 @@ func NewViewport() *Viewport {
 	return &Viewport{
 		cam:        render.Defaults(),
 		raster:     render.New(),
+		toolpaths:  render.NewToolpathDrawer(),
 		background: color.NRGBA{R: 0xdc, G: 0xdc, B: 0xdc, A: 0xff},
 	}
 }
+
+// SetLayers swaps to toolpath-preview mode showing layers. The mesh
+// stays loaded so [Viewport.SetMode] can toggle back without reslicing.
+func (v *Viewport) SetLayers(layers []slice.Layer) {
+	v.layers = layers
+	v.mode = ViewToolpaths
+	guigui.RequestRedraw(v)
+}
+
+// SetMode switches between mesh and toolpath rendering. Toolpath mode
+// is a no-op until [Viewport.SetLayers] has been called.
+func (v *Viewport) SetMode(m ViewMode) {
+	v.mode = m
+	guigui.RequestRedraw(v)
+}
+
+// Mode returns the currently displayed view.
+func (v *Viewport) Mode() ViewMode { return v.mode }
 
 // SetScene replaces the displayed scene and asks for a fresh fit on the
 // next layout pass. The fit is deferred to Layout because that's when the
@@ -81,11 +114,17 @@ func (v *Viewport) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBo
 	}
 }
 
-// Draw clears the viewport background and rasterizes the current scene.
+// Draw clears the viewport background and renders either the mesh or
+// the sliced toolpaths depending on the active [ViewMode].
 func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBounds, dst *ebiten.Image) {
 	b := widgetBounds.Bounds()
 	dst.SubImage(b).(*ebiten.Image).Fill(v.background)
-	v.raster.Draw(dst, b, v.scene, &v.cam)
+	switch v.mode {
+	case ViewMesh:
+		v.raster.Draw(dst, b, v.scene, &v.cam)
+	case ViewToolpaths:
+		v.toolpaths.Draw(dst, b, v.layers, &v.cam)
+	}
 }
 
 // HandlePointingInput translates mouse input into camera changes. Guigui

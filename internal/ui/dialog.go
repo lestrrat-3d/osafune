@@ -29,3 +29,25 @@ func (NativeOpener) Pick() (string, bool) {
 	}
 	return path, true
 }
+
+// NativeSaver opens the platform-native save-file dialog for the
+// gcode-out flow.
+type NativeSaver struct{}
+
+// PickSave implements [FileSaver]. It returns ok=false when the user
+// cancels.
+func (NativeSaver) PickSave(defaultName string) (string, bool) {
+	path, err := dialog.File().
+		Title("Save gcode").
+		Filter("Gcode", "gcode").
+		Filter("All files", "*").
+		SetStartFile(defaultName).
+		Save()
+	if err != nil {
+		if errors.Is(err, dialog.ErrCancelled) {
+			return "", false
+		}
+		return "", false
+	}
+	return path, true
+}

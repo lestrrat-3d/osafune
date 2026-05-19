@@ -29,7 +29,7 @@ func main() {
 		initial = flag.Arg(0)
 	}
 
-	root := ui.NewRoot(ui.NativeOpener{}, initial)
+	root := ui.NewRoot(ui.NativeOpener{}, ui.NativeSaver{}, initial)
 
 	opts := &guigui.RunOptions{
 		Title:         "makislicer viewer",

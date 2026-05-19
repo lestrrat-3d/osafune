@@ -1,0 +1,4 @@
+/.tmp/
+/.worktrees/
+/go.work
+/go.work.sum
