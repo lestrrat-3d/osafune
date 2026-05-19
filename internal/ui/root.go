@@ -36,17 +36,29 @@ type FileOpener interface {
 type Root struct {
 	guigui.DefaultWidget
 
-	background   basicwidget.Background
-	openButton   basicwidget.Button
-	resetButton  basicwidget.Button
-	sliceButton  basicwidget.Button
-	meshButton   basicwidget.Button
-	saveButton   basicwidget.Button
-	objectPane   ObjectPane
-	viewport     *Viewport
-	layerSlider  LayerRangeSlider
-	opener       FileOpener
-	saver        FileSaver
+	background       basicwidget.Background
+	openButton       basicwidget.Button
+	resetButton      basicwidget.Button
+	sliceButton      basicwidget.Button
+	meshButton       basicwidget.Button
+	saveButton       basicwidget.Button
+	patternLabel     basicwidget.Text
+	patternSelect    basicwidget.Select[config.InfillPattern]
+	densityLabel     basicwidget.Text
+	densityInput     basicwidget.NumberInput
+	objectPane       ObjectPane
+	viewport         *Viewport
+	layerSlider      LayerRangeSlider
+	opener           FileOpener
+	saver            FileSaver
+
+	// infillPattern and infillDensityPct are the user's last selections;
+	// they override the defaults whenever runSlice runs. Density is
+	// stored as a 0-100 percent because that's what the NumberInput
+	// works with — converted to 0..1 at the boundary.
+	infillPattern      config.InfillPattern
+	infillDensityPct   int
+	infillItemsLoaded  bool // true after the first Build populated the pattern dropdown
 
 	// pendingPath, when non-empty, is a path queued for loading on the next
 	// Build pass. Setting it from Build (e.g. from the Open button's OnUp)
@@ -74,11 +86,14 @@ type Root struct {
 // clicks "Open"; pass nil to hide the Open button. saver is invoked when
 // the user clicks "Save Gcode"; pass nil to hide that button.
 func NewRoot(opener FileOpener, saver FileSaver, initialPath string) *Root {
+	defaults := config.DefaultProcess()
 	return &Root{
-		viewport:    NewViewport(),
-		opener:      opener,
-		saver:       saver,
-		initialPath: initialPath,
+		viewport:         NewViewport(),
+		opener:           opener,
+		saver:            saver,
+		initialPath:      initialPath,
+		infillPattern:    defaults.InfillPattern,
+		infillDensityPct: int(defaults.InfillDensity * 100),
 	}
 }
 
@@ -89,9 +104,41 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.sliceButton)
 	adder.AddWidget(&r.meshButton)
 	adder.AddWidget(&r.saveButton)
+	adder.AddWidget(&r.patternLabel)
+	adder.AddWidget(&r.patternSelect)
+	adder.AddWidget(&r.densityLabel)
+	adder.AddWidget(&r.densityInput)
 	adder.AddWidget(&r.objectPane)
 	adder.AddWidget(r.viewport)
 	adder.AddWidget(&r.layerSlider)
+
+	r.patternLabel.SetValue("Pattern")
+	if !r.infillItemsLoaded {
+		// First Build pass: populate the dropdown with the supported
+		// patterns. Selected index defaults to whatever
+		// r.infillPattern was initialised to.
+		r.patternSelect.SetItems([]basicwidget.SelectItem[config.InfillPattern]{
+			{Text: "Rectilinear", Value: config.InfillRectilinear},
+			{Text: "Grid", Value: config.InfillGrid},
+			{Text: "Triangles", Value: config.InfillTriangles},
+			{Text: "Concentric", Value: config.InfillConcentric},
+		})
+		r.patternSelect.SelectItemByValue(r.infillPattern)
+		r.infillItemsLoaded = true
+	}
+	r.patternSelect.OnItemSelected(func(context *guigui.Context, index int) {
+		if it, ok := r.patternSelect.ItemByIndex(index); ok {
+			r.infillPattern = it.Value
+		}
+	})
+
+	r.densityLabel.SetValue("Infill %")
+	r.densityInput.SetMinimumValue(0)
+	r.densityInput.SetMaximumValue(100)
+	r.densityInput.SetValue(r.infillDensityPct)
+	r.densityInput.OnValueChanged(func(context *guigui.Context, value int, committed bool) {
+		r.infillDensityPct = value
+	})
 	r.layerSlider.OnChanged(func(lo, hi int) {
 		r.viewport.SetLayerRange(lo, hi)
 	})
@@ -157,6 +204,10 @@ func (r *Root) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBounds
 		guigui.LinearLayoutItem{Widget: &r.sliceButton, Size: guigui.FixedSize(5 * u)},
 		guigui.LinearLayoutItem{Widget: &r.meshButton, Size: guigui.FixedSize(6 * u)},
 		guigui.LinearLayoutItem{Widget: &r.saveButton, Size: guigui.FixedSize(7 * u)},
+		guigui.LinearLayoutItem{Widget: &r.patternLabel, Size: guigui.FixedSize(3 * u)},
+		guigui.LinearLayoutItem{Widget: &r.patternSelect, Size: guigui.FixedSize(7 * u)},
+		guigui.LinearLayoutItem{Widget: &r.densityLabel, Size: guigui.FixedSize(3 * u)},
+		guigui.LinearLayoutItem{Widget: &r.densityInput, Size: guigui.FixedSize(4 * u)},
 		guigui.LinearLayoutItem{Size: guigui.FlexibleSize(1)},
 	)
 	toolbar := guigui.LinearLayout{
@@ -267,6 +318,10 @@ func (r *Root) runSlice() {
 	}
 	proj := project.NewFromScene(r.viewport.scene)
 	plate := &proj.Plates[0]
+	// Apply the toolbar's pattern + density choices on top of the
+	// default process before slicing.
+	plate.Process.InfillPattern = r.infillPattern
+	plate.Process.InfillDensity = float64(r.infillDensityPct) / 100.0
 	m := proj.PlateMesh(0)
 	layers := slice.Slice(&m, &plate.Printer, &plate.Process)
 	if len(layers) == 0 {

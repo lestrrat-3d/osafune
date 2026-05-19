@@ -10,6 +10,31 @@
 // CLI/flag override after calling one of the DefaultXxx constructors.
 package config
 
+// InfillPattern selects the geometric pattern the slicer uses to fill
+// the interior of each layer. The MVP supports four; OrcaSlicer's full
+// catalogue (gyroid, honeycomb, cubic, etc.) is intentionally left for
+// later because each adds a non-trivial chunk of geometry work.
+type InfillPattern string
+
+const (
+	// InfillRectilinear is parallel lines that alternate angle every
+	// layer (45° / -45°). Cheap to compute, prints fast, weak in shear.
+	InfillRectilinear InfillPattern = "rectilinear"
+	// InfillGrid lays two perpendicular sets of lines per layer at the
+	// process angle and angle+90°. Visually denser than rectilinear for
+	// the same density, stiffer, but with more retraction-free travels
+	// at the crossings.
+	InfillGrid InfillPattern = "grid"
+	// InfillTriangles lays three line sets at 0°, 60° and 120°. Best
+	// isotropic stiffness of the line-based patterns; print time goes up
+	// with the extra direction.
+	InfillTriangles InfillPattern = "triangles"
+	// InfillConcentric repeats the perimeter offsetter inward at the
+	// infill spacing. Looks like nested rings of the contour and prints
+	// very clean for round parts; poor at filling narrow rectangles.
+	InfillConcentric InfillPattern = "concentric"
+)
+
 // GcodeFlavor selects which dialect of gcode the emitter produces. OrcaSlicer
 // supports several; the MVP emitter is Marlin-with-OrcaSlicer-comment-headers
 // since every Bambu/Voron/Prusa/generic-Marlin printer accepts that subset,
@@ -139,8 +164,13 @@ type Process struct {
 
 	// InfillDensity is the fraction of interior to fill, 0..1. The MVP
 	// renders that as line spacing = LineWidth / InfillDensity for the
-	// rectilinear pattern.
+	// rectilinear pattern; multi-direction patterns (grid, triangles)
+	// adjust the spacing by the number of directions so that volumetric
+	// density still matches the requested fraction.
 	InfillDensity float64
+
+	// InfillPattern selects the fill geometry. See [InfillPattern].
+	InfillPattern InfillPattern
 
 	// Speeds, all mm/s.
 	TravelSpeed            float64
@@ -170,6 +200,7 @@ func DefaultProcess() Process {
 		TopLayers:              4,
 		BottomLayers:           3,
 		InfillDensity:          0.15,
+		InfillPattern:          InfillRectilinear,
 		TravelSpeed:            200,
 		PerimeterSpeed:         60,
 		ExternalPerimeterSpeed: 40,

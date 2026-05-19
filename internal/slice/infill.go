@@ -7,11 +7,11 @@ import (
 	"github.com/lestrrat-go/makislicer/internal/config"
 )
 
-// GenerateInfill fills the regions inside the innermost perimeter wall
-// with a rectilinear (parallel-line) pattern, alternating angles per
-// layer. Top and bottom skin layers — the first BottomLayers and the
-// last TopLayers — get solid fill (lines spaced at exactly lineWidth);
-// the rest get sparse fill (spacing = lineWidth / density).
+// GenerateInfill fills the regions inside the innermost perimeter wall.
+// Top and bottom skin layers — the first BottomLayers and the last
+// TopLayers — always use solid rectilinear fill (lines spaced at exactly
+// lineWidth); the rest follow the user-selected [config.InfillPattern]
+// at the chosen density.
 //
 // The MVP intentionally does NOT do per-region geometric skin detection
 // (i.e. "this part of the layer has no layer above, so it must be
@@ -24,20 +24,102 @@ func GenerateInfill(layer *Layer, areas []ExPolygon, process *config.Process, to
 		return
 	}
 	width, spacing, speed, role := infillParams(layer, process, totalLayers)
-	angle := infillAngleForLayer(layer.Index, process.InfillAngles)
+	pattern := process.InfillPattern
+	if role == RoleSolidInfill {
+		// Skin layers ignore the user's chosen sparse pattern — they
+		// need 100% coverage which only rectilinear lines at exactly
+		// lineWidth spacing provides.
+		pattern = config.InfillRectilinear
+	}
+	if pattern == "" {
+		pattern = config.InfillRectilinear
+	}
 	for _, a := range areas {
-		lines := rectilinearLines(a, angle, spacing)
-		for _, ln := range lines {
-			pts := make([]Point2, len(ln))
-			copy(pts, ln)
+		emitPattern(layer, a, pattern, layer.Index, spacing, width, speed, role, process.InfillAngles)
+	}
+}
+
+// emitPattern dispatches the per-area fill generation to the right
+// algorithm. Each branch appends one or more [Path]s to the layer.
+func emitPattern(layer *Layer, area ExPolygon, pattern config.InfillPattern, layerIdx int, spacing, width, speed float64, role PathRole, angles []float64) {
+	switch pattern {
+	case config.InfillGrid:
+		// Two perpendicular sets per layer. Double the spacing so total
+		// extruded volume matches the requested density.
+		base := infillAngleForLayer(layerIdx, angles)
+		appendRectilinear(layer, area, base, spacing*2, width, speed, role)
+		appendRectilinear(layer, area, base+90, spacing*2, width, speed, role)
+	case config.InfillTriangles:
+		// Three sets at 60° increments. Triple the spacing so volumetric
+		// density still matches the requested fraction.
+		base := infillAngleForLayer(layerIdx, angles)
+		appendRectilinear(layer, area, base, spacing*3, width, speed, role)
+		appendRectilinear(layer, area, base+60, spacing*3, width, speed, role)
+		appendRectilinear(layer, area, base+120, spacing*3, width, speed, role)
+	case config.InfillConcentric:
+		appendConcentric(layer, area, spacing, width, speed, role)
+	default: // rectilinear
+		angle := infillAngleForLayer(layerIdx, angles)
+		appendRectilinear(layer, area, angle, spacing, width, speed, role)
+	}
+}
+
+func appendRectilinear(layer *Layer, area ExPolygon, angleDeg, spacing, width, speed float64, role PathRole) {
+	lines := rectilinearLines(area, angleDeg, spacing)
+	for _, ln := range lines {
+		pts := make([]Point2, len(ln))
+		copy(pts, ln)
+		layer.Paths = append(layer.Paths, Path{
+			Points: pts,
+			Role:   role,
+			Width:  width,
+			Speed:  speed,
+			Closed: false,
+		})
+	}
+}
+
+// appendConcentric repeatedly offsets the infill area inward by spacing
+// and emits each resulting loop as a closed path. Stops when an offset
+// produces a degenerate (<3 vertex) outer or when the polygon has
+// shrunk to zero area, which serves as a natural termination for
+// arbitrary input shapes.
+func appendConcentric(layer *Layer, area ExPolygon, spacing, width, speed float64, role PathRole) {
+	// The first ring sits half a spacing inside the wall so the extruded
+	// edge meets the inner wall's edge cleanly, the same trick we use
+	// for the outermost perimeter.
+	current := OffsetExPolygon(area, spacing*0.5)
+	for safety := 0; safety < 1000; safety++ {
+		if len(current.Outer) < 3 {
+			return
+		}
+		if current.Outer.Area() < spacing*spacing {
+			return
+		}
+		pts := make([]Point2, len(current.Outer))
+		copy(pts, current.Outer)
+		layer.Paths = append(layer.Paths, Path{
+			Points: pts,
+			Role:   role,
+			Width:  width,
+			Speed:  speed,
+			Closed: true,
+		})
+		for _, h := range current.Holes {
+			if len(h) < 3 {
+				continue
+			}
+			hpts := make([]Point2, len(h))
+			copy(hpts, h)
 			layer.Paths = append(layer.Paths, Path{
-				Points: pts,
+				Points: hpts,
 				Role:   role,
 				Width:  width,
 				Speed:  speed,
-				Closed: false,
+				Closed: true,
 			})
 		}
+		current = OffsetExPolygon(current, spacing)
 	}
 }
 
