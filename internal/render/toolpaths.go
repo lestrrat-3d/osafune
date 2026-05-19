@@ -52,79 +52,114 @@ type LegendEntry struct {
 	Label string
 }
 
-// ToolpathDrawer renders sliced layers as volumetric extrusion segments
-// — each segment is a world-space oriented box of (Path.Width × Layer.Height
-// × segment length) — projected through the camera and painter-sorted
-// in view space. That gives the preview the same chunky tube-like feel
-// real slicers ship: upper layers occlude lower ones, segments behind
-// segments are properly hidden, and the cross-section actually has
-// visual mass instead of being a hairline screen-space stroke.
+// tubeSides is the number of facets around each extrusion segment's
+// elliptical cross-section. Eight is the lowest count that reads as
+// "round" rather than "polygonal" at typical viewing distances; bump
+// it for prettier previews at the cost of proportional CPU work.
+const tubeSides = 8
+
+// Precomputed unit-circle samples for the cross-section corners and
+// for the midpoints between adjacent corners (used to derive face
+// normals). Filled in by init().
+var (
+	tubeCos [tubeSides]float32 // cos at corner k
+	tubeSin [tubeSides]float32 // sin at corner k
+	// midCos/midSin give the direction of the inward-of-the-arc
+	// midpoint between corner k and corner k+1 — i.e. the direction
+	// the k-th face's outward normal points to before being mapped
+	// into world space.
+	tubeMidCos [tubeSides]float32
+	tubeMidSin [tubeSides]float32
+)
+
+func init() {
+	for k := 0; k < tubeSides; k++ {
+		theta := 2 * math.Pi * float64(k) / float64(tubeSides)
+		tubeCos[k] = float32(math.Cos(theta))
+		tubeSin[k] = float32(math.Sin(theta))
+		mid := 2 * math.Pi * (float64(k) + 0.5) / float64(tubeSides)
+		tubeMidCos[k] = float32(math.Cos(mid))
+		tubeMidSin[k] = float32(math.Sin(mid))
+	}
+}
+
+// ToolpathDrawer renders sliced layers as round tube-shaped extrusion
+// segments — each segment is a world-space prism with an elliptical
+// cross-section of (Path.Width × Layer.Height), projected through the
+// camera and painter-sorted in view space. The elliptical profile
+// matches what a real squashed-extrusion plastic bead looks like:
+// wider than tall (the nozzle squashes it against the layer below),
+// and just touching the neighbours on every side.
 //
-// Each segment emits its 4 long-axis faces (top, bottom, two sides);
-// end caps are intentionally omitted because adjacent segments along a
-// path share the same endpoint, and the cap geometry would just
-// interpenetrate with the next segment without adding visual value.
-// Painter's algorithm handles inter-face ordering globally — back
-// faces of a box have more-negative view Z than front faces, so they
-// sort earlier and get overdrawn by the visible front faces in the
-// same pass.
+// Back-facing facets are culled in the world-space pass; the visible
+// front facets of a convex segment cannot overlap each other in
+// screen space, so they may be emitted in any order within a segment.
+// Across segments, a per-segment painter sort handles inter-segment
+// occlusion. End caps are intentionally omitted: adjacent segments
+// along a path share endpoints, and caps would just interpenetrate
+// without adding visual value.
 type ToolpathDrawer struct {
+	// LightDir is the unit direction the virtual key light shines
+	// toward. Same convention as the mesh rasterizer's LightDir
+	// (shade = ambient + (1-ambient) · max(0, n · -LightDir)).
+	LightDir mesh.Vec3
+
+	// AmbientFactor in [0, 1] keeps the shadow-side of tubes
+	// readable rather than going to black.
+	AmbientFactor float32
+
 	// LineWidthPx is retained for backwards compatibility but no
-	// longer has any effect: extrusion width now comes from each
-	// [slice.Path]'s Width field (the real mm value the slicer
-	// computed), so zooming in genuinely shows fatter strokes.
+	// longer has any effect on this volumetric renderer.
 	LineWidthPx float32
 
 	// Scratch buffers reused across frames.
-	faces   []faceQuad
+	segs    []segmentRecord
 	verts   []ebiten.Vertex
 	indices []uint16
 }
 
-// faceQuad is one rectangular face of a segment's bounding box, ready
-// to draw: four screen-space corners (already coloured + shaded) and a
-// painter-sort key. avgZ is in camera view space — more-negative is
-// further from the camera (see [Camera.Project]).
-type faceQuad struct {
-	v0, v1, v2, v3 ebiten.Vertex
-	avgZ           float32
+// segmentRecord caches the per-segment geometry the emit phase needs:
+// the 2·tubeSides projected cross-section corners (one ring at each
+// endpoint), the perpendicular direction in XY that the ring is
+// parameterised against, the base role colour, and the painter-sort
+// key (segment-centre view Z).
+type segmentRecord struct {
+	aProj [tubeSides]Projected
+	bProj [tubeSides]Projected
+	rX    float32
+	rY    float32
+	baseR float32
+	baseG float32
+	baseB float32
+	avgZ  float32
 }
 
-// NewToolpathDrawer returns a drawer with a default stroke baseline.
-// LineWidthPx is no longer used by the volumetric renderer; the field
-// is kept on the struct so callers that set it before [Draw] continue
-// to compile.
-func NewToolpathDrawer() *ToolpathDrawer { return &ToolpathDrawer{LineWidthPx: 1.5} }
-
-// Per-face shade factors. The top face is the brightest because the
-// virtual key light points down-and-toward-the-camera; sides take a
-// mid-tone so the eye can read each segment as a 3D body; the bottom
-// is darkest so an upside-down camera doesn't look identical to a
-// right-side-up one. The values are calibrated by eye against
-// OrcaSlicer's preview at a default viewing angle.
-const (
-	shadeTop    = 1.00
-	shadeSide   = 0.70
-	shadeBottom = 0.40
-)
+// NewToolpathDrawer returns a drawer using the same key light /
+// ambient settings as the mesh rasterizer, so the toolpath preview's
+// shading reads consistently when the user toggles between mesh and
+// toolpath modes.
+func NewToolpathDrawer() *ToolpathDrawer {
+	return &ToolpathDrawer{
+		LightDir:      normalize(mesh.Vec3{-0.4, -0.5, -0.8}),
+		AmbientFactor: 0.4,
+		LineWidthPx:   1.5,
+	}
+}
 
 // minExtrusionWidth and minLayerHeight clamp degenerate path metadata
-// (e.g. travel moves or zero-width init paths) so we never produce a
-// flat box that disappears at certain angles.
+// so a zero-width path never produces a sliver tube that disappears
+// at certain angles.
 const (
 	minExtrusionWidth = 0.05 // mm
 	minLayerHeight    = 0.05 // mm
 )
 
-// Draw walks every extrusion segment in layers, builds the 4-face
-// bounding box for each segment in world space, projects all 8 unique
-// corners through cam, and ships the resulting screen-space faces
-// through ebiten.Image.DrawTriangles after a global painter's sort.
-//
-// The per-frame work is bounded by O(segments × 8 projections + faces ×
-// log faces). For a Wind-Turbine-class slice that's ~90k segments →
-// ~720k projections and ~360k face sorts; comfortably real-time on a
-// modern desktop.
+// Draw is the renderer entry point — see [ToolpathDrawer] for the
+// high-level algorithm. Each frame: collect per-segment records,
+// reject any segment whose cross-section pokes behind the near plane,
+// sort the survivors by view-space depth, then emit front-facing
+// facets in sorted segment order into a single index buffer that's
+// chunked at the uint16 cap.
 func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, layers []slice.Layer, cam *Camera) {
 	w := dstBounds.Dx()
 	h := dstBounds.Dy()
@@ -137,22 +172,20 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 	fw := float32(w)
 	fh := float32(h)
 
-	d.faces = d.faces[:0]
+	d.segs = d.segs[:0]
 
 	for li := range layers {
 		layer := &layers[li]
-		layerZ := float32(layer.Z)
 		layerH := float32(layer.Height)
 		if layerH < minLayerHeight {
 			layerH = minLayerHeight
 		}
 		halfH := layerH * 0.5
-		zTop := layerZ
-		zBot := layerZ - layerH // Layer.Z is top-of-layer; the layer
-		// actually occupies [Z-Height, Z]. Drawing the box between
-		// those planes makes adjacent layers' boxes meet at exactly
-		// the same Z, so there's no vertical gap to see through.
-		_ = halfH
+		// Layer.Z is the top of the layer; the printed bead occupies
+		// [Z-Height, Z]. Centring the cross-section on the layer
+		// midpoint makes adjacent layers' tubes meet at exactly the
+		// layer boundary.
+		centerZ := float32(layer.Z) - halfH
 
 		for _, p := range layer.Paths {
 			if !p.Role.IsExtrusion() || len(p.Points) < 2 {
@@ -188,155 +221,156 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 					continue
 				}
 				inv := float32(1.0 / math.Sqrt(float64(len2)))
-				// Perpendicular in the XY plane, length = halfW.
-				perpX := -dy * inv * halfW
-				perpY := dx * inv * halfW
+				// Right-hand perpendicular to segment in XY (unit).
+				rX := -dy * inv
+				rY := dx * inv
 
-				// Eight world-space corners. Naming: A/B = which path
-				// endpoint, m/p = minus/plus perpendicular side,
-				// t/b = top/bottom in Z.
-				amt := cam.Project(mesh.Vec3{ax - perpX, ay - perpY, zTop}, aspect)
-				amb := cam.Project(mesh.Vec3{ax - perpX, ay - perpY, zBot}, aspect)
-				apt := cam.Project(mesh.Vec3{ax + perpX, ay + perpY, zTop}, aspect)
-				apb := cam.Project(mesh.Vec3{ax + perpX, ay + perpY, zBot}, aspect)
-				bmt := cam.Project(mesh.Vec3{bx - perpX, by - perpY, zTop}, aspect)
-				bmb := cam.Project(mesh.Vec3{bx - perpX, by - perpY, zBot}, aspect)
-				bpt := cam.Project(mesh.Vec3{bx + perpX, by + perpY, zTop}, aspect)
-				bpb := cam.Project(mesh.Vec3{bx + perpX, by + perpY, zBot}, aspect)
-				if !amt.InFront || !amb.InFront || !apt.InFront || !apb.InFront ||
-					!bmt.InFront || !bmb.InFront || !bpt.InFront || !bpb.InFront {
-					// Any vertex behind the near plane → drop the
-					// whole box. Robust clipping is a follow-up; the
-					// bounding-box fit keeps the print in front in
-					// normal use.
-					continue
+				rec := segmentRecord{
+					rX:    rX,
+					rY:    rY,
+					baseR: baseR,
+					baseG: baseG,
+					baseB: baseB,
 				}
 
-				// Project to screen-space vertex helpers.
-				vAmt := projToVertex(amt, x0, y0, fw, fh, baseR, baseG, baseB)
-				vAmb := projToVertex(amb, x0, y0, fw, fh, baseR, baseG, baseB)
-				vApt := projToVertex(apt, x0, y0, fw, fh, baseR, baseG, baseB)
-				vApb := projToVertex(apb, x0, y0, fw, fh, baseR, baseG, baseB)
-				vBmt := projToVertex(bmt, x0, y0, fw, fh, baseR, baseG, baseB)
-				vBmb := projToVertex(bmb, x0, y0, fw, fh, baseR, baseG, baseB)
-				vBpt := projToVertex(bpt, x0, y0, fw, fh, baseR, baseG, baseB)
-				vBpb := projToVertex(bpb, x0, y0, fw, fh, baseR, baseG, baseB)
-
-				// Top face (+Z): brightest.
-				d.faces = append(d.faces, faceQuad{
-					v0:   shade(vAmt, shadeTop),
-					v1:   shade(vBmt, shadeTop),
-					v2:   shade(vBpt, shadeTop),
-					v3:   shade(vApt, shadeTop),
-					avgZ: (amt.ViewZ + bmt.ViewZ + bpt.ViewZ + apt.ViewZ) * 0.25,
-				})
-				// Bottom face (-Z): darkest.
-				d.faces = append(d.faces, faceQuad{
-					v0:   shade(vAmb, shadeBottom),
-					v1:   shade(vApb, shadeBottom),
-					v2:   shade(vBpb, shadeBottom),
-					v3:   shade(vBmb, shadeBottom),
-					avgZ: (amb.ViewZ + apb.ViewZ + bpb.ViewZ + bmb.ViewZ) * 0.25,
-				})
-				// −perp side face.
-				d.faces = append(d.faces, faceQuad{
-					v0:   shade(vAmb, shadeSide),
-					v1:   shade(vAmt, shadeSide),
-					v2:   shade(vBmt, shadeSide),
-					v3:   shade(vBmb, shadeSide),
-					avgZ: (amb.ViewZ + amt.ViewZ + bmt.ViewZ + bmb.ViewZ) * 0.25,
-				})
-				// +perp side face.
-				d.faces = append(d.faces, faceQuad{
-					v0:   shade(vApb, shadeSide),
-					v1:   shade(vBpb, shadeSide),
-					v2:   shade(vBpt, shadeSide),
-					v3:   shade(vApt, shadeSide),
-					avgZ: (apb.ViewZ + bpb.ViewZ + bpt.ViewZ + apt.ViewZ) * 0.25,
-				})
+				allInFront := true
+				var sumAZ, sumBZ float32
+				for k := 0; k < tubeSides; k++ {
+					c := tubeCos[k]
+					s := tubeSin[k]
+					ox := rX * c * halfW
+					oy := rY * c * halfW
+					oz := s * halfH
+					pa := cam.Project(mesh.Vec3{ax + ox, ay + oy, centerZ + oz}, aspect)
+					pb := cam.Project(mesh.Vec3{bx + ox, by + oy, centerZ + oz}, aspect)
+					rec.aProj[k] = pa
+					rec.bProj[k] = pb
+					if !pa.InFront || !pb.InFront {
+						allInFront = false
+						break
+					}
+					sumAZ += pa.ViewZ
+					sumBZ += pb.ViewZ
+				}
+				if !allInFront {
+					// Any vertex behind the near plane → drop the
+					// whole tube. Robust near-plane clipping is a
+					// follow-up; the bounding-box-fit camera keeps
+					// the print in front in normal use.
+					continue
+				}
+				rec.avgZ = (sumAZ + sumBZ) / (2 * tubeSides)
+				d.segs = append(d.segs, rec)
 			}
 		}
 	}
 
-	if len(d.faces) == 0 {
+	if len(d.segs) == 0 {
 		return
 	}
 
-	// Painter's algorithm: most-negative view Z (furthest from
-	// camera) first, so nearer faces overdraw them. Matches the mesh
-	// rasterizer's scheme.
-	sort.Slice(d.faces, func(i, j int) bool {
-		return d.faces[i].avgZ < d.faces[j].avgZ
+	// Painter sort by segment centre: most-negative view Z (furthest
+	// from camera) first, so nearer tubes overdraw them.
+	sort.Slice(d.segs, func(i, j int) bool {
+		return d.segs[i].avgZ < d.segs[j].avgZ
 	})
 
-	// uint16 index cap: 6 indices per quad → 10922 quads per draw.
-	const quadsPerBatch = 65535 / 6
-	for start := 0; start < len(d.faces); start += quadsPerBatch {
-		end := start + quadsPerBatch
-		if end > len(d.faces) {
-			end = len(d.faces)
+	d.emitSegments(dst, x0, y0, fw, fh)
+}
+
+// emitSegments walks the segment list in painter-sorted order,
+// builds each segment's front-facing facets into the shared vertex /
+// index buffer, and flushes via DrawTriangles each time we'd
+// otherwise exceed the uint16 index cap.
+//
+// Backface culling is done in screen space via the signed area of
+// the projected quad: a back-facing facet's corners wind opposite to
+// a front-facing one's, so the cross-product of the two diagonals
+// flips sign. That's both cheaper than reconstructing world-space
+// coords for an eye-vs-facet dot product, and correct under
+// perspective projection.
+func (d *ToolpathDrawer) emitSegments(dst *ebiten.Image, x0, y0, fw, fh float32) {
+	const quadsPerBatch = 65535 / 6 // 6 indices per quad
+
+	d.verts = d.verts[:0]
+	d.indices = d.indices[:0]
+	quadsInBatch := 0
+
+	for si := range d.segs {
+		seg := &d.segs[si]
+		for k := 0; k < tubeSides; k++ {
+			kn := (k + 1) % tubeSides
+
+			// World-space outward normal of facet k.
+			midC := tubeMidCos[k]
+			midS := tubeMidSin[k]
+			nx := seg.rX * midC
+			ny := seg.rY * midC
+			nz := midS
+			// (rX, rY) is unit in XY, and (midC, midS) sits on the
+			// unit circle, so (nx, ny, nz) is already unit-length —
+			// no normalisation needed.
+
+			pa0 := seg.aProj[k]
+			pa1 := seg.aProj[kn]
+			pb0 := seg.bProj[k]
+			pb1 := seg.bProj[kn]
+
+			sax0 := x0 + (pa0.X+1)*0.5*fw
+			say0 := y0 + (1-(pa0.Y+1)*0.5)*fh
+			sax1 := x0 + (pa1.X+1)*0.5*fw
+			say1 := y0 + (1-(pa1.Y+1)*0.5)*fh
+			sbx1 := x0 + (pb1.X+1)*0.5*fw
+			sby1 := y0 + (1-(pb1.Y+1)*0.5)*fh
+			sbx0 := x0 + (pb0.X+1)*0.5*fw
+			sby0 := y0 + (1-(pb0.Y+1)*0.5)*fh
+
+			// Screen-space signed area of the quad (a0 → a1 → b1 →
+			// b0). Positive means CCW in screen coords with Y-down,
+			// which we use as our "front facing" convention. A
+			// degenerate (zero-area) facet seen edge-on contributes
+			// nothing — skip.
+			area := (sax1-sax0)*(sby0-say0) - (sbx0-sax0)*(say1-say0)
+			if area <= 0 {
+				continue
+			}
+
+			// Lambertian shade. The normal we want here is the
+			// world-space facet normal; shade independent of view.
+			ndotL := -(nx*d.LightDir[0] + ny*d.LightDir[1] + nz*d.LightDir[2])
+			if ndotL < 0 {
+				ndotL = 0
+			}
+			shade := d.AmbientFactor + (1-d.AmbientFactor)*ndotL
+			sR := seg.baseR * shade
+			sG := seg.baseG * shade
+			sB := seg.baseB * shade
+
+			// Flush the current batch if appending one more quad
+			// would push the index buffer past the uint16 cap.
+			if quadsInBatch == quadsPerBatch {
+				dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
+				d.verts = d.verts[:0]
+				d.indices = d.indices[:0]
+				quadsInBatch = 0
+			}
+
+			vb := uint16(len(d.verts))
+			d.verts = append(d.verts,
+				ebiten.Vertex{DstX: sax0, DstY: say0, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
+				ebiten.Vertex{DstX: sax1, DstY: say1, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
+				ebiten.Vertex{DstX: sbx1, DstY: sby1, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
+				ebiten.Vertex{DstX: sbx0, DstY: sby0, ColorR: sR, ColorG: sG, ColorB: sB, ColorA: 1},
+			)
+			d.indices = append(d.indices,
+				vb, vb+1, vb+2,
+				vb, vb+2, vb+3,
+			)
+			quadsInBatch++
 		}
-		d.emitBatch(dst, d.faces[start:end])
 	}
-}
 
-// emitBatch packs the given face quads into Vertex / index buffers and
-// issues a single DrawTriangles call. Buffers are stored on the
-// receiver so consecutive frames reuse the same backing array.
-func (d *ToolpathDrawer) emitBatch(dst *ebiten.Image, quads []faceQuad) {
-	n := len(quads)
-	vNeed := n * 4
-	iNeed := n * 6
-	if cap(d.verts) < vNeed {
-		d.verts = make([]ebiten.Vertex, vNeed)
-	} else {
-		d.verts = d.verts[:vNeed]
+	if quadsInBatch > 0 {
+		dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
 	}
-	if cap(d.indices) < iNeed {
-		d.indices = make([]uint16, iNeed)
-	} else {
-		d.indices = d.indices[:iNeed]
-	}
-	for i, q := range quads {
-		vb := i * 4
-		ib := i * 6
-		d.verts[vb] = q.v0
-		d.verts[vb+1] = q.v1
-		d.verts[vb+2] = q.v2
-		d.verts[vb+3] = q.v3
-		// Two triangles: 0-1-2 and 0-2-3.
-		d.indices[ib] = uint16(vb)
-		d.indices[ib+1] = uint16(vb + 1)
-		d.indices[ib+2] = uint16(vb + 2)
-		d.indices[ib+3] = uint16(vb)
-		d.indices[ib+4] = uint16(vb + 2)
-		d.indices[ib+5] = uint16(vb + 3)
-	}
-	dst.DrawTriangles(d.verts, d.indices, getWhite(), nil)
-}
-
-// projToVertex maps a camera projection result to an Ebitengine
-// screen-space vertex carrying a base colour. Flips Y because NDC is
-// OpenGL-style (Y up) and screen Y points down.
-func projToVertex(p Projected, x0, y0, fw, fh, cr, cg, cb float32) ebiten.Vertex {
-	return ebiten.Vertex{
-		DstX:   x0 + (p.X+1)*0.5*fw,
-		DstY:   y0 + (1-(p.Y+1)*0.5)*fh,
-		SrcX:   0,
-		SrcY:   0,
-		ColorR: cr,
-		ColorG: cg,
-		ColorB: cb,
-		ColorA: 1,
-	}
-}
-
-// shade multiplies the vertex's RGB channels by s in place. Used to
-// brighten the top face / darken sides + bottom so a segment reads as
-// a 3D box rather than a flat ribbon.
-func shade(v ebiten.Vertex, s float32) ebiten.Vertex {
-	v.ColorR *= s
-	v.ColorG *= s
-	v.ColorB *= s
-	return v
 }
