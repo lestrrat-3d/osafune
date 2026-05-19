@@ -8,7 +8,9 @@ import (
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/guigui-gui/guigui"
 
@@ -162,6 +164,33 @@ func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBoun
 			layers = layers[v.layerLo : v.layerHi+1]
 		}
 		v.toolpaths.Draw(dst, b, layers, &v.cam)
+		v.drawLegend(dst, b)
+	}
+}
+
+// drawLegend stamps a small colour key in the top-left of the viewport
+// so the user can decode the toolpath palette without consulting docs.
+// Only invoked from toolpath mode — the mesh view has nothing to label.
+func (v *Viewport) drawLegend(dst *ebiten.Image, viewportBounds image.Rectangle) {
+	entries := render.LegendEntries()
+	const (
+		pad    = 8
+		swatch = 12
+		row    = 16
+	)
+	bgW := 130
+	bgH := pad*2 + row*len(entries)
+	x := viewportBounds.Min.X + pad
+	y := viewportBounds.Min.Y + pad
+	vector.DrawFilledRect(dst, float32(x), float32(y), float32(bgW), float32(bgH),
+		color.NRGBA{0xff, 0xff, 0xff, 0xc0}, false)
+	for i, e := range entries {
+		sy := y + pad + i*row
+		vector.DrawFilledRect(dst,
+			float32(x+pad), float32(sy+2),
+			float32(swatch), float32(swatch),
+			e.Color, false)
+		ebitenutil.DebugPrintAt(dst, e.Label, x+pad+swatch+6, sy)
 	}
 }
 
