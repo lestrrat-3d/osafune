@@ -127,6 +127,43 @@ func (c *Camera) Project(p mesh.Vec3, aspect float32) Projected {
 	return Projected{X: nx, Y: ny, ViewZ: zv, InFront: true}
 }
 
+// ViewProj bundles the per-frame camera constants (basis vectors and FOV
+// factors) so a batch of points can be projected without recomputing the
+// basis and its trig on every call. [Camera.Project] is convenient for one
+// point but recomputes [Camera.Basis] each time; projecting millions of
+// toolpath vertices per frame makes that redundant trig the hot path.
+type ViewProj struct {
+	eye, right, up, forward mesh.Vec3
+	near, fx, fy            float32
+}
+
+// ViewProj returns the projection constants for the given aspect ratio.
+func (c *Camera) ViewProj(aspect float32) ViewProj {
+	eye, right, up, forward := c.Basis()
+	fy := float32(1.0 / math.Tan(float64(c.FOV)*0.5))
+	return ViewProj{eye: eye, right: right, up: up, forward: forward, near: c.Near, fx: fy / aspect, fy: fy}
+}
+
+// Eye returns the camera position baked into these constants.
+func (v *ViewProj) Eye() mesh.Vec3 { return v.eye }
+
+// Project transforms a world point using the precomputed constants. It
+// matches [Camera.Project] exactly but does no per-call basis or trig work.
+func (v *ViewProj) Project(p mesh.Vec3) Projected {
+	dx := p[0] - v.eye[0]
+	dy := p[1] - v.eye[1]
+	dz := p[2] - v.eye[2]
+	xv := dx*v.right[0] + dy*v.right[1] + dz*v.right[2]
+	yv := dx*v.up[0] + dy*v.up[1] + dz*v.up[2]
+	zv := -(dx*v.forward[0] + dy*v.forward[1] + dz*v.forward[2])
+	if zv > -v.near {
+		return Projected{ViewZ: zv}
+	}
+	nx := xv * v.fx / -zv
+	ny := yv * v.fy / -zv
+	return Projected{X: nx, Y: ny, ViewZ: zv, InFront: true}
+}
+
 // PanScreen moves Target by the given screen-space deltas (in pixels). The
 // deltas are converted to world units at the depth of the current Target so
 // the model tracks the cursor at a sensible rate regardless of zoom.

@@ -58,6 +58,12 @@ type Viewport struct {
 	// values are mirrored from the layer-range slider in the toolbar.
 	layerLo, layerHi int
 
+	// geomGen is bumped whenever the sliced layers or the visible layer
+	// range change. It keys the toolpath drawer's geometry cache so a
+	// static view re-issues prebuilt draw batches instead of reprojecting
+	// every segment each frame.
+	geomGen int
+
 	drag       dragMode
 	dragPrev   image.Point
 	dragButton ebiten.MouseButton
@@ -85,6 +91,7 @@ func (v *Viewport) SetLayers(layers []slice.Layer) {
 	v.layerLo = 0
 	v.layerHi = len(layers) - 1
 	v.mode = ViewToolpaths
+	v.geomGen++
 	guigui.RequestRedraw(v)
 }
 
@@ -103,7 +110,11 @@ func (v *Viewport) SetLayerRange(lo, hi int) {
 	if hi < lo {
 		hi = lo
 	}
+	if lo == v.layerLo && hi == v.layerHi {
+		return // no change — keep the cached batches valid
+	}
 	v.layerLo, v.layerHi = lo, hi
+	v.geomGen++
 	guigui.RequestRedraw(v)
 }
 
@@ -163,7 +174,12 @@ func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBoun
 		if v.layerLo >= 0 && v.layerHi >= 0 && v.layerHi >= v.layerLo && v.layerHi < len(layers) {
 			layers = layers[v.layerLo : v.layerHi+1]
 		}
-		v.toolpaths.Draw(dst, b, layers, &v.cam)
+		// Signal whether the camera is being dragged; the drawer decides
+		// whether the view is dense enough to warrant the walls-only draft
+		// or can keep full detail (infill included). Full detail is restored
+		// when the drag ends (HandlePointingInput requests a redraw on
+		// release).
+		v.toolpaths.Draw(dst, b, layers, &v.cam, v.geomGen, v.drag != dragNone)
 		v.drawLegend(dst, b)
 	}
 }
@@ -251,6 +267,10 @@ func (v *Viewport) HandlePointingInput(context *guigui.Context, widgetBounds *gu
 		// should stop.
 		if !ebiten.IsMouseButtonPressed(v.dragButton) {
 			v.drag = dragNone
+			// Drag just ended: request one more redraw so the viewport
+			// re-renders at full detail (the draft drawn during the drag
+			// was walls-only).
+			changed = true
 		} else {
 			dx := float32(cx - v.dragPrev.X)
 			dy := float32(cy - v.dragPrev.Y)
