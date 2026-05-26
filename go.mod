@@ -4,6 +4,7 @@ go 1.26.1
 
 replace (
 	github.com/lestrrat-go/3mf => ../3mf
+	github.com/lestrrat-go/polyclip => ../polyclip
 	github.com/lestrrat-go/stl => ../stl
 )
 
@@ -11,6 +12,7 @@ require (
 	github.com/guigui-gui/guigui v0.0.0-20260517124159-c9a57b611f94
 	github.com/hajimehoshi/ebiten/v2 v2.10.0-alpha.11.0.20260517123839-aa5fda041ba7
 	github.com/lestrrat-go/3mf v0.0.0-00010101000000-000000000000
+	github.com/lestrrat-go/polyclip v0.0.0-00010101000000-000000000000
 	github.com/lestrrat-go/stl v0.0.0-00010101000000-000000000000
 	github.com/sqweek/dialog v0.0.0-20260123140253-64c163d53aac
 )

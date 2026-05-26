@@ -5,10 +5,15 @@ import (
 	"github.com/lestrrat-go/makislicer/internal/mesh"
 )
 
-// Slice runs the full MVP pipeline: Z-sweep → perimeter walls →
-// rectilinear infill. It does not order paths for travel-minimisation
-// (paths come out in the order they were generated) and it does not
-// emit gcode — the [gcode] package consumes the returned layers.
+// Slice runs the full pipeline: Z-sweep → perimeter walls → skin detection
+// → infill. It does not order paths for travel-minimisation (paths come
+// out in the order they were generated) and it does not emit gcode — the
+// [gcode] package consumes the returned layers.
+//
+// Skin detection runs as a whole-model pass between perimeters and infill
+// because it compares each layer's fill region against its vertical
+// neighbours; perimeters must be generated for every layer first so the
+// fill regions exist to compare.
 //
 // The caller passes a single mesh: project-level concerns (multiple
 // instances, plates, translations) are handled by [project.Project.PlateMesh]
@@ -18,10 +23,25 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 		return nil
 	}
 	layers := SliceMesh(m, process.FirstLayerHeight, process.LayerHeight)
-	total := len(layers)
+
+	// Pass 1: walls for every layer, collecting the per-layer fill regions.
+	// Clean the raw contours first — chaining a non-manifold or noisy mesh
+	// can leave self-crossing loops and near-duplicate vertices that Offset
+	// and the boolean skin pass would otherwise amplify into stray spikes
+	// and false-solid regions (and a far larger toolpath count).
+	fillAreas := make([][]ExPolygon, len(layers))
 	for i := range layers {
-		infillAreas := GeneratePerimeters(&layers[i], process)
-		GenerateInfill(&layers[i], infillAreas, process, total)
+		layers[i].Contours = simplifyRegions(layers[i].Contours)
+		fillAreas[i] = GeneratePerimeters(&layers[i], process)
+	}
+
+	// Pass 2: classify each fill region into solid skin / sparse interior
+	// by comparing it against the layers above and below.
+	solid, sparse := ClassifySkin(fillAreas, process.TopLayers, process.BottomLayers)
+
+	// Pass 3: lay down the actual fill.
+	for i := range layers {
+		GenerateInfill(&layers[i], solid[i], sparse[i], process)
 	}
 	return layers
 }

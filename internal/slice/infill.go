@@ -8,34 +8,49 @@ import (
 )
 
 // GenerateInfill fills the regions inside the innermost perimeter wall.
-// Top and bottom skin layers — the first BottomLayers and the last
-// TopLayers — always use solid rectilinear fill (lines spaced at exactly
-// lineWidth); the rest follow the user-selected [config.InfillPattern]
-// at the chosen density.
+// The fill region has already been split by [ClassifySkin] into solid
+// (skin) and sparse parts using polygon boolean ops across neighbouring
+// layers: solidAreas are the exposed top/bottom surfaces and the shell
+// beneath them, sparseAreas are the enclosed interior.
 //
-// The MVP intentionally does NOT do per-region geometric skin detection
-// (i.e. "this part of the layer has no layer above, so it must be
-// solid"). That requires polygon boolean ops, which the naive offsetter
-// doesn't provide. Without it, overhangs and shapes that narrow upward
-// will print a thin top where they shouldn't — acceptable for a first
-// working slicer.
-func GenerateInfill(layer *Layer, areas []ExPolygon, process *config.Process, totalLayers int) {
-	if len(areas) == 0 {
-		return
+// Solid regions get 100% rectilinear coverage (lines spaced at exactly
+// lineWidth); sparse regions follow the user-selected
+// [config.InfillPattern] at the chosen density. This is geometric skin
+// detection — a shape that narrows upward now gets a solid top exactly
+// where it loses the layer above, instead of a thin sparse top.
+func GenerateInfill(layer *Layer, solidAreas, sparseAreas []ExPolygon, process *config.Process) {
+	width := process.LineWidth
+	if layer.Index == 0 {
+		width = process.FirstLayerLineWidth
 	}
-	width, spacing, speed, role := infillParams(layer, process, totalLayers)
+	angle := infillAngleForLayer(layer.Index, process.InfillAngles)
+
+	// Solid skin: rectilinear lines at exactly lineWidth spacing for full
+	// coverage; the user's sparse pattern is irrelevant here.
+	solidSpeed := process.SolidInfillSpeed
+	if layer.Index == 0 {
+		solidSpeed = process.FirstLayerSpeed
+	}
+	for _, a := range solidAreas {
+		appendRectilinear(layer, a, angle, width, width, solidSpeed, RoleSolidInfill)
+	}
+
+	// Sparse interior: user pattern at density-derived spacing.
+	sparseSpeed := process.InfillSpeed
+	if layer.Index == 0 {
+		sparseSpeed = process.FirstLayerSpeed
+	}
+	density := process.InfillDensity
+	if density <= 0 {
+		density = 0.01 // avoid divide-by-zero; effectively no infill
+	}
+	spacing := width / density
 	pattern := process.InfillPattern
-	if role == RoleSolidInfill {
-		// Skin layers ignore the user's chosen sparse pattern — they
-		// need 100% coverage which only rectilinear lines at exactly
-		// lineWidth spacing provides.
-		pattern = config.InfillRectilinear
-	}
 	if pattern == "" {
 		pattern = config.InfillRectilinear
 	}
-	for _, a := range areas {
-		emitPattern(layer, a, pattern, layer.Index, spacing, width, speed, role, process.InfillAngles)
+	for _, a := range sparseAreas {
+		emitPattern(layer, a, pattern, layer.Index, spacing, width, sparseSpeed, RoleInfill, process.InfillAngles)
 	}
 }
 
@@ -80,72 +95,33 @@ func appendRectilinear(layer *Layer, area ExPolygon, angleDeg, spacing, width, s
 }
 
 // appendConcentric repeatedly offsets the infill area inward by spacing
-// and emits each resulting loop as a closed path. Stops when an offset
-// produces a degenerate (<3 vertex) outer or when the polygon has
-// shrunk to zero area, which serves as a natural termination for
-// arbitrary input shapes.
+// and emits each resulting loop as a closed path. A robust inward offset
+// can split a region into several disjoint pieces (a dumbbell past its
+// neck), so each iteration carries a worklist of regions and offsets them
+// all. A piece is emitted until it shrinks below one spacing of area or
+// the offset collapses it, which terminates the loop for arbitrary shapes.
 func appendConcentric(layer *Layer, area ExPolygon, spacing, width, speed float64, role PathRole) {
 	// The first ring sits half a spacing inside the wall so the extruded
 	// edge meets the inner wall's edge cleanly, the same trick we use
 	// for the outermost perimeter.
 	current := OffsetExPolygon(area, spacing*0.5)
-	for safety := 0; safety < 1000; safety++ {
-		if len(current.Outer) < 3 {
-			return
-		}
-		if current.Outer.Area() < spacing*spacing {
-			return
-		}
-		pts := make([]Point2, len(current.Outer))
-		copy(pts, current.Outer)
-		layer.Paths = append(layer.Paths, Path{
-			Points: pts,
-			Role:   role,
-			Width:  width,
-			Speed:  speed,
-			Closed: true,
-		})
-		for _, h := range current.Holes {
-			if len(h) < 3 {
+	for safety := 0; safety < 1000 && len(current) > 0; safety++ {
+		var survivors []ExPolygon
+		for _, region := range current {
+			if len(region.Outer) < 3 || region.Outer.Area() < spacing*spacing {
 				continue
 			}
-			hpts := make([]Point2, len(h))
-			copy(hpts, h)
-			layer.Paths = append(layer.Paths, Path{
-				Points: hpts,
-				Role:   role,
-				Width:  width,
-				Speed:  speed,
-				Closed: true,
-			})
+			appendClosedPath(layer, region.Outer, role, width, speed)
+			for _, h := range region.Holes {
+				appendClosedPath(layer, h, role, width, speed)
+			}
+			survivors = append(survivors, region)
 		}
-		current = OffsetExPolygon(current, spacing)
-	}
-}
-
-func infillParams(layer *Layer, process *config.Process, totalLayers int) (width, spacing, speed float64, role PathRole) {
-	width = process.LineWidth
-	if layer.Index == 0 {
-		width = process.FirstLayerLineWidth
-	}
-	solid := layer.Index < process.BottomLayers || layer.Index >= totalLayers-process.TopLayers
-	if solid {
-		role = RoleSolidInfill
-		speed = process.SolidInfillSpeed
-		spacing = width
-	} else {
-		role = RoleInfill
-		speed = process.InfillSpeed
-		density := process.InfillDensity
-		if density <= 0 {
-			density = 0.01 // avoid divide-by-zero; effectively no infill
+		if len(survivors) == 0 {
+			return
 		}
-		spacing = width / density
+		current = offsetRegions(survivors, spacing)
 	}
-	if layer.Index == 0 {
-		speed = process.FirstLayerSpeed
-	}
-	return width, spacing, speed, role
 }
 
 func infillAngleForLayer(layerIdx int, angles []float64) float64 {

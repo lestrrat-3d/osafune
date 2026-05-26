@@ -20,35 +20,40 @@ func GeneratePerimeters(layer *Layer, process *config.Process) []ExPolygon {
 	}
 	lineWidth, extSpeed, intSpeed := perimeterParams(layer, process)
 
-	var infillAreas []ExPolygon
-	for _, contour := range layer.Contours {
-		current := contour
-		for w := 0; w < process.Perimeters; w++ {
-			// First wall: offset by half a lineWidth so the extrusion's
-			// edge (which sits half a lineWidth from the path) aligns
-			// with the slice contour. Subsequent walls: lineWidth apart.
-			var d float64
-			if w == 0 {
-				d = lineWidth * 0.5
-			} else {
-				d = lineWidth
-			}
-			current = OffsetExPolygon(current, d)
-			role := RolePerimeter
-			speed := intSpeed
-			if w == 0 {
-				role = RoleExternalPerimeter
-				speed = extSpeed
-			}
-			appendClosedPath(layer, current.Outer, role, lineWidth, speed)
-			for _, h := range current.Holes {
+	// `current` is the set of regions the next wall is traced inside.
+	// Because a robust inward offset can split one region into several
+	// disjoint pieces (a part that necks apart under the offset) or drop a
+	// feature that collapses, we carry the whole set forward rather than
+	// one contour at a time — every wall after the first is offset from
+	// whatever the previous offset produced.
+	current := layer.Contours
+	for w := 0; w < process.Perimeters; w++ {
+		// First wall: offset by half a lineWidth so the extrusion's edge
+		// (which sits half a lineWidth from the path) aligns with the
+		// slice contour. Subsequent walls: a full lineWidth apart.
+		d := lineWidth
+		if w == 0 {
+			d = lineWidth * 0.5
+		}
+		current = offsetRegions(current, d)
+		role := RolePerimeter
+		speed := intSpeed
+		if w == 0 {
+			role = RoleExternalPerimeter
+			speed = extSpeed
+		}
+		for _, region := range current {
+			appendClosedPath(layer, region.Outer, role, lineWidth, speed)
+			for _, h := range region.Holes {
 				appendClosedPath(layer, h, role, lineWidth, speed)
 			}
 		}
-		// Infill area = innermost wall offset inward by another half
-		// lineWidth, so the infill extrusion's outer edge meets the
-		// innermost wall's inner edge.
-		infill := OffsetExPolygon(current, lineWidth*0.5)
+	}
+	// Infill area = innermost walls offset inward by another half
+	// lineWidth, so the infill extrusion's outer edge meets the innermost
+	// wall's inner edge.
+	var infillAreas []ExPolygon
+	for _, infill := range offsetRegions(current, lineWidth*0.5) {
 		if len(infill.Outer) >= 3 {
 			infillAreas = append(infillAreas, infill)
 		}
