@@ -4,7 +4,8 @@ import (
 	"image"
 	"image/color"
 	"math"
-	"sort"
+	"runtime"
+	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
 
@@ -28,7 +29,7 @@ func RoleColor(r slice.PathRole) color.NRGBA {
 	case slice.RoleSolidInfill:
 		return color.NRGBA{0x1f, 0x8a, 0xc9, 0xff} // solid infill — cyan
 	}
-	return color.NRGBA{0x60, 0x60, 0x60, 0x40}
+	return color.NRGBA{0x60, 0x60, 0x60, 0xff}
 }
 
 // LegendEntries returns the role/colour pairs the preview uses, in the
@@ -52,328 +53,375 @@ type LegendEntry struct {
 	Label string
 }
 
-// ToolpathDrawer renders sliced layers using the same billboard trick
-// OrcaSlicer's GCode viewer uses (see libvgcode/SegmentTemplate.cpp +
-// Shaders.hpp in the upstream OrcaSlicer source): each extrusion
-// segment is an 8-vertex / 8-triangle camera-facing ribbon with a
-// boat-shaped silhouette — three "ring" corners (top, near side,
-// bottom) at each endpoint plus a pointed spike that extends along
-// the line direction. The spike hides the join between consecutive
-// segments along a path; the camera-facing flip keeps the ribbon
-// presenting its broad face to the viewer from any angle.
+// ToolpathDrawer renders sliced layers as true 3D extrusion volumes with a
+// software z-buffer, the way OrcaSlicer's GCode viewer does on the GPU. Each
+// extrusion segment becomes a box (line width × layer height, swept along
+// the path); the boxes are projected, back-face culled, and rasterized with
+// per-pixel depth into an offscreen image, which is then blitted to screen.
 //
-// The 3D illusion comes from per-vertex Lambertian shading using a
-// normal derived from (vertex - endpoint), interpolated across the
-// triangle. The top corner is lit, the bottom is dark, sides fall
-// in between — same trick the OrcaSlicer GPU shader uses, just done
-// CPU-side because ebiten doesn't expose programmable vertex shaders.
+// A real z-buffer (rather than the old camera-facing billboards + painter's
+// sort) is what gives faithful occlusion: the boxes tile in 3D by
+// construction, so adjacent beads and layers never leave see-through gaps,
+// and interior infill is correctly hidden behind the walls that enclose it
+// while genuinely concave features still show.
+//
+// Ebiten has no GPU depth buffer, so the rasterizer is CPU-side and
+// parallel. The rendered image is cached and only rebuilt when the camera,
+// viewport, or sliced geometry changes (see [toolpathCacheKey]); a static
+// view costs only a blit. While the camera is being dragged the drawer can
+// fall back to a decimated walls-only pass to stay responsive.
 type ToolpathDrawer struct {
-	// LightDir is the unit direction the virtual key light shines
-	// toward. Same convention as the mesh rasterizer's LightDir
-	// (shade = ambient + (1-ambient) · max(0, n · -LightDir)).
+	// LightDir is the unit direction the virtual key light shines toward.
 	LightDir mesh.Vec3
-
-	// AmbientFactor in [0, 1] keeps the shadow side of a segment
-	// readable rather than going to pure black.
+	// AmbientFactor in [0,1] keeps shadowed faces readable.
 	AmbientFactor float32
-
-	// LineWidthPx is retained on the struct so existing callers that
-	// assign to it continue to compile; the volumetric billboard
-	// renderer does not consult it any more (extrusion width comes
-	// straight from each [slice.Path]'s mm-space Width field).
+	// LineWidthPx is retained so existing callers that assign to it still
+	// compile; the volumetric renderer takes width from each path instead.
 	LineWidthPx float32
 
-	// segs is a scratch buffer reused across rebuilds: the projected,
-	// painter-sorted billboards for the current camera. It is rebuilt only
-	// when the cache key changes (see below), not every frame.
-	segs []segmentBillboard
+	// target holds the most recently rendered frame; a cache hit blits it.
+	target *ebiten.Image
+	// rgba and zbuf are the reused color (premultiplied RGBA) and depth
+	// buffers the rasterizer writes into before WritePixels to target.
+	rgba []byte
+	zbuf []float32
+	// tris is the projected triangle list rasterized each frame (shell
+	// projection plus any cut-face beads).
+	tris []rtri
 
-	// batches holds the finished DrawTriangles payloads (each within the
-	// uint16 index cap). Projecting and painter-sorting every segment is
-	// the expensive part of a frame, and its result depends only on the
-	// camera, the viewport bounds, and which sliced geometry is shown — so
-	// we keep the built batches and re-issue them verbatim while that key
-	// is unchanged. A static view (the common case once a model is sliced)
-	// then costs only the draw calls, which is what stops a
-	// million-segment preview from pinning the UI on every redraw.
-	batches    []drawBatch
+	// worldSlab is the camera-independent solid wall shell (built once per
+	// geometry change, keyed by slabGeomGen); slabBufs are the per-worker
+	// buffers projectSlab fills.
+	worldSlab   []wtri
+	slabGeomGen int
+	slabBufs    [][]rtri
+
 	cacheValid bool
 	cacheKey   toolpathCacheKey
-
-	// lastFullSegCount is the segment count from the most recent
-	// full-detail (non-decimated) rebuild. It estimates the cost of drawing
-	// everything, so a drag keeps full detail — infill included — when the
-	// visible geometry is light enough, and only falls back to the
-	// walls-only draft when drawing it all would stutter.
-	lastFullSegCount int
-	// decimationBudget is the full-detail segment count above which a drag
-	// switches to the walls-only draft. At/under it, dragging draws
-	// everything. Roughly tuned so a drag rebuild stays within a few tens
-	// of milliseconds.
-	decimationBudget int
 }
 
-// drawBatch is one ready-to-issue DrawTriangles payload: up to the uint16
-// index cap of segment billboards, already projected and shaded.
-type drawBatch struct {
-	verts   []ebiten.Vertex
-	indices []uint16
-}
+// dragRenderScale shrinks the render resolution while the camera is being
+// dragged, so an orbit stays responsive on a software rasterizer; the full
+// resolution is restored when the camera settles. The low-res frame is
+// upscaled on blit (slightly soft while moving, crisp once still). The solid
+// wall shell is cached (built once per geometry change), so a drag only pays
+// projection + rasterization and can afford a fairly high scale.
+const dragRenderScale = 0.75
 
-// toolpathCacheKey identifies a built [ToolpathDrawer.batches] set. geomGen
-// is bumped by the viewport whenever the sliced layers or the visible layer
-// range change; cam and bounds capture the only other inputs the projection
-// depends on. [Camera] is an all-value struct, so == is a complete compare.
+// toolpathCacheKey identifies a rendered frame. geomGen is bumped by the
+// viewport when the sliced layers or visible layer range change; cam and
+// the render dimensions (rw×rh — reduced while dragging) are the remaining
+// inputs the rendered pixels depend on. [Camera] is an all-value struct, so
+// == is a complete compare.
 type toolpathCacheKey struct {
-	geomGen   int
-	cam       Camera
-	bounds    image.Rectangle
-	wallsOnly bool // decimated draft drawn while the camera is moving
+	geomGen    int
+	cam        Camera
+	rw, rh         int
+	topCut, botCut bool
 }
 
-// segmentBillboard caches one segment's 8 finished screen-space vertices
-// plus the painter-sort depth key. The key is the segment's NEAREST
-// endpoint depth (largest view Z, i.e. closest to the eye), not the mean of
-// the corners: a wall segment is a ribbon tilted in depth, so its mean sits
-// behind a flat interior-infill segment at the same pixel and the infill
-// wrongly paints over the enclosing wall. Sorting by the nearest point
-// makes the outer wall win while still letting a genuinely concave feature
-// (e.g. a recess) show its interior. Generated in the projection pass and
-// consumed, in sorted order, by the emit pass.
-type segmentBillboard struct {
-	verts    [segmentVertexCount]ebiten.Vertex
-	depthKey float32
+// rtri is a screen-space triangle ready to rasterize: three (x, y, viewZ)
+// vertices and a packed 0xRRGGBB colour (already shaded). Larger viewZ is
+// nearer the eye.
+type rtri struct {
+	ax, ay, az float32
+	bx, by, bz float32
+	cx, cy, cz float32
+	col        uint32
 }
 
-// segmentVertexCount is the per-segment vertex count of OrcaSlicer's
-// template. Eight vertices, eight triangles — see segmentTriangles.
-const segmentVertexCount = 8
-
-// segmentTriangles is the index pattern from
-// libvgcode/SegmentTemplate.cpp (VERTEX_DATA). Eight triangles: two
-// front-spike fans, four body, two back-spike fans. Indices here are
-// the local 0–7 offsets; the emit loop adds the segment's base
-// vertex index to each.
-var segmentTriangles = [8][3]uint16{
-	{0, 1, 2}, // front spike
-	{0, 2, 3}, // front spike
-	{0, 3, 4}, // right/bottom body
-	{0, 4, 5}, // right/bottom body
-	{0, 5, 6}, // left/top body
-	{0, 6, 1}, // left/top body
-	{5, 4, 7}, // back spike
-	{5, 7, 6}, // back spike
+// boxFaces indexes the 12 triangles (6 quads) of an extrusion box into its
+// 8 corners: 0–3 are the start cap (−right−up, +right−up, +right+up,
+// −right+up), 4–7 the matching end cap.
+var boxFaces = [12][3]int{
+	{0, 1, 2}, {0, 2, 3}, // start cap
+	{4, 6, 5}, {4, 7, 6}, // end cap
+	{0, 4, 5}, {0, 5, 1}, // bottom
+	{3, 2, 6}, {3, 6, 7}, // top
+	{0, 3, 7}, {0, 7, 4}, // left
+	{1, 5, 6}, {1, 6, 2}, // right
 }
 
-// horizontalViewSigns / verticalViewSigns are the
-// horizontal_vertical_view_signs_array constants from the OrcaSlicer
-// vertex shader (libvgcode/Shaders.hpp). Each pair is (right_sign,
-// up_sign): the multipliers applied to halfWidth·lineRight and
-// halfHeight·lineUp when placing a vertex relative to its endpoint.
-// Vertex ids 2 and 7 sit at the endpoint itself (signs 0,0) and get
-// extended into a spike along ±lineDir by the geometry pass.
-var (
-	horizontalViewSigns = [segmentVertexCount][2]float32{
-		{1, 0},
-		{0, 1},
-		{0, 0},
-		{0, -1},
-		{0, -1},
-		{1, 0},
-		{0, 1},
-		{0, 0},
-	}
-	verticalViewSigns = [segmentVertexCount][2]float32{
-		{0, 1},
-		{-1, 0},
-		{0, 0},
-		{1, 0},
-		{1, 0},
-		{0, 1},
-		{-1, 0},
-		{0, 0},
-	}
+const (
+	minExtrusionWidth = 0.05 // mm
+	minLayerHeight    = 0.05 // mm
 )
+
+var worldUp = mesh.Vec3{0, 0, 1}
 
 // NewToolpathDrawer returns a drawer with the same key-light / ambient
 // values as the mesh rasterizer, so the toolpath preview and the mesh
 // preview shade consistently when the user toggles between them.
 func NewToolpathDrawer() *ToolpathDrawer {
 	return &ToolpathDrawer{
-		LightDir:         normalize(mesh.Vec3{-0.4, -0.5, -0.8}),
-		AmbientFactor:    0.4,
-		LineWidthPx:      1.5,
-		decimationBudget: 150_000,
+		LightDir:      norm3(mesh.Vec3{-0.4, -0.5, -0.8}),
+		AmbientFactor: 0.4,
+		LineWidthPx:   1.5,
+		slabGeomGen:   -1, // force a build on the first thick render
 	}
 }
 
-// minExtrusionWidth and minLayerHeight clamp degenerate path metadata
-// so a zero-dimensioned path can't produce a sliver billboard that
-// disappears or projects to NaN at edge-on viewing angles.
-const (
-	minExtrusionWidth = 0.05 // mm
-	minLayerHeight    = 0.05 // mm
-)
-
-// worldUp is the slicer's Z-up convention. line_up direction
-// degenerates to this for any segment lying in an XY plane, which is
-// the only kind of segment our planar slicer emits — but the cross-
-// product fallback below also handles a hypothetical vertical move.
-var worldUp = mesh.Vec3{0, 0, 1}
-
-// Draw is the renderer entry point. geomGen identifies the sliced
-// geometry + visible layer range (the viewport bumps it on change); when
-// it, the camera, and the viewport bounds all match the last frame, the
-// already-built batches are re-issued without re-projecting or re-sorting.
-// Otherwise the batches are rebuilt: each extrusion segment becomes 8
-// screen-space vertices (the OrcaSlicer ribbon template), the segments are
-// painter-sorted by mean view Z, and packed into DrawTriangles batches at
-// the uint16 index cap.
-// interacting signals that the camera is being dragged. The drawer then
-// decides whether it can still afford full detail: only when the last
-// full-detail rebuild exceeded [ToolpathDrawer.decimationBudget] does a
-// drag fall back to the walls-only draft (perimeters, infill skipped).
-// So a light view — including one scrubbed to a narrow layer range to
-// inspect infill — keeps its infill visible while rotating; only a
-// genuinely dense view decimates, and it rebuilds full detail when the
-// camera settles.
-func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, layers []slice.Layer, cam *Camera, geomGen int, interacting bool) {
-	w := dstBounds.Dx()
-	h := dstBounds.Dy()
+// Draw renders the visible layers' toolpaths to dst within dstBounds.
+// geomGen identifies the sliced geometry + visible range; interacting
+// signals the camera is being dragged; topCut/botCut say whether the top or
+// bottom of the visible range is a cut (the slider was narrowed there), in
+// which case that boundary layer's toolpaths are drawn on the exposed cut
+// face while the sides stay a solid wall shell. The rendered frame is
+// cached: when geomGen, the camera, the render resolution, and the cut flags
+// all match the last call, the cached image is blitted without re-rendering.
+// While dragging, the frame is rendered at a reduced resolution
+// ([dragRenderScale]) and upscaled on blit so an orbit stays responsive;
+// full resolution is restored on settle.
+func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, layers []slice.Layer, cam *Camera, geomGen int, interacting, topCut, botCut bool) {
+	w, h := dstBounds.Dx(), dstBounds.Dy()
 	if w <= 0 || h <= 0 || len(layers) == 0 {
 		return
 	}
-	d.prepare(dstBounds, layers, cam, geomGen, interacting)
-	d.drawBatches(dst)
+	rw, rh := w, h
+	if interacting {
+		rw = max(1, int(float64(w)*dragRenderScale))
+		rh = max(1, int(float64(h)*dragRenderScale))
+	}
+	rebuilt := d.prepare(rw, rh, layers, cam, geomGen, topCut, botCut)
+	if d.target == nil || d.target.Bounds().Dx() != rw || d.target.Bounds().Dy() != rh {
+		d.target = ebiten.NewImage(rw, rh)
+		rebuilt = true // fresh target needs the pixels uploaded
+	}
+	if rebuilt {
+		d.target.WritePixels(d.rgba)
+	}
+	op := &ebiten.DrawImageOptions{}
+	op.GeoM.Scale(float64(w)/float64(rw), float64(h)/float64(rh)) // upscale reduced-res frames
+	op.GeoM.Translate(float64(dstBounds.Min.X), float64(dstBounds.Min.Y))
+	dst.DrawImage(d.target, op)
 }
 
-// prepare ensures [ToolpathDrawer.batches] is current for the given inputs,
-// rebuilding (reproject + sort + pack) only on a cache miss. It returns
-// true when a rebuild happened. It does no drawing, so it is exercisable
-// without an Ebiten graphics context — Draw is just prepare + drawBatches.
-func (d *ToolpathDrawer) prepare(dstBounds image.Rectangle, layers []slice.Layer, cam *Camera, geomGen int, interacting bool) bool {
-	// Decimate to walls only while dragging ONLY if the full view is too
-	// heavy to redraw smoothly. Below the budget, dragging keeps infill.
-	wallsOnly := interacting && d.lastFullSegCount > d.decimationBudget
-
-	key := toolpathCacheKey{geomGen: geomGen, cam: *cam, bounds: dstBounds, wallsOnly: wallsOnly}
-	if d.cacheValid && key == d.cacheKey {
+// prepare ensures the rendered frame in d.rgba is current for the inputs,
+// re-rendering at rw×rh only on a cache miss. It returns true when a
+// re-render happened. It touches no ebiten image, so it is exercisable
+// without a graphics context — Draw is just prepare + upload + blit.
+//
+// The body is always the solid wall shell (camera-independent geometry
+// built once per geomGen, then projected). At a cut (topCut/botCut), that
+// boundary layer's toolpaths are overlaid on the exposed cross-section.
+func (d *ToolpathDrawer) prepare(rw, rh int, layers []slice.Layer, cam *Camera, geomGen int, topCut, botCut bool) bool {
+	key := toolpathCacheKey{geomGen: geomGen, cam: *cam, rw: rw, rh: rh, topCut: topCut, botCut: botCut}
+	if d.cacheValid && key == d.cacheKey && len(d.rgba) == rw*rh*4 {
 		return false
 	}
-	d.rebuild(dstBounds, layers, cam, wallsOnly)
-	if !wallsOnly {
-		d.lastFullSegCount = len(d.segs)
+	if len(d.rgba) != rw*rh*4 {
+		d.rgba = make([]byte, rw*rh*4)
+		d.zbuf = make([]float32, rw*rh)
 	}
+
+	vp := cam.ViewProj(float32(rw) / float32(rh))
+	// Body: the solid wall shell (camera-independent, built once per
+	// geometry change). The cut faces' caps are skipped so the cut-face
+	// toolpaths below aren't hidden by a wall cap.
+	if d.slabGeomGen != geomGen || d.worldSlab == nil {
+		d.buildWorldSlab(layers, topCut, botCut)
+		d.slabGeomGen = geomGen
+	}
+	d.projectSlab(rw, rh, &vp)
+	// Cut faces: at each cut, overlay that boundary layer's actual toolpath
+	// beads, so the exposed cross-section reads as paths/infill while the
+	// sides stay walls.
+	if topCut {
+		d.appendLayerBeads(&layers[len(layers)-1], &vp, rw, rh)
+	}
+	if botCut && len(layers) > 1 {
+		d.appendLayerBeads(&layers[0], &vp, rw, rh)
+	}
+	d.rasterize(rw, rh)
+
 	d.cacheKey = key
 	d.cacheValid = true
 	return true
 }
 
-// rebuild reprojects every visible segment for the current camera, painter-
-// sorts them, and packs them into [ToolpathDrawer.batches]. This is the
-// expensive path; [ToolpathDrawer.Draw] runs it only when the cache key
-// changes.
-func (d *ToolpathDrawer) rebuild(dstBounds image.Rectangle, layers []slice.Layer, cam *Camera, wallsOnly bool) {
-	aspect := float32(dstBounds.Dx()) / float32(dstBounds.Dy())
-	x0 := float32(dstBounds.Min.X)
-	y0 := float32(dstBounds.Min.Y)
-	fw := float32(dstBounds.Dx())
-	fh := float32(dstBounds.Dy())
-
-	// Precompute the projection constants once per rebuild instead of
-	// recomputing the camera basis (and its trig) for every one of the
-	// millions of projected vertices.
-	vp := cam.ViewProj(aspect)
-
-	d.segs = d.segs[:0]
-
-	for li := range layers {
-		layer := &layers[li]
-		layerH := float32(layer.Height)
-		if layerH < minLayerHeight {
-			layerH = minLayerHeight
+// appendLayerBeads appends one layer's extrusion-path beads (boxes) to
+// d.tris — used to render a cutaway's exposed cross-section as toolpaths on
+// top of the projected wall shell.
+func (d *ToolpathDrawer) appendLayerBeads(layer *slice.Layer, vp *ViewProj, w, h int) {
+	eye := vp.Eye()
+	fw, fh := float32(w), float32(h)
+	layerH := float32(layer.Height)
+	if layerH < minLayerHeight {
+		layerH = minLayerHeight
+	}
+	halfH := layerH * 0.5
+	centerZ := float32(layer.Z) - halfH
+	for pi := range layer.Paths {
+		p := &layer.Paths[pi]
+		if !p.Role.IsExtrusion() || len(p.Points) < 2 {
+			continue
 		}
-		halfH := layerH * 0.5
-		// Layer.Z is the top of the layer; the bead occupies
-		// [Z-Height, Z]. Centring the billboard on the midpoint
-		// makes adjacent layers' geometry meet at the exact layer
-		// boundary so they appear continuous in Z.
-		centerZ := float32(layer.Z) - halfH
-		// Billboard vertical half-extent: two full layer heights rather than
-		// the geometric half (a 4× layer-height ribbon), so each bead heavily
-		// overlaps its neighbours. On a curved or sloped surface seen at a
-		// near-edge-on (grazing) angle the thin per-layer ribbons project far
-		// apart and leave see-through horizontal gaps between layers; this
-		// overlap bridges them down to ~2° elevation (one full layer height /
-		// 2× overlap was enough at ~6° but not at ~2°). centerZ (above) is
-		// unchanged, so beads stay centred on their true layer midpoint.
-		billboardHalfH := layerH * 2
+		if pathOffscreen(vp, p, centerZ, fw, fh) {
+			continue
+		}
+		extrW := float32(p.Width)
+		if extrW < minExtrusionWidth {
+			extrW = minExtrusionWidth
+		}
+		halfW := extrW * 0.5
+		rc := RoleColor(p.Role)
+		n := len(p.Points)
+		nseg := n - 1
+		if p.Closed {
+			nseg = n
+		}
+		for i := 0; i < nseg; i++ {
+			a := p.Points[i]
+			b := p.Points[(i+1)%n]
+			appendBox(&d.tris, vp, eye, fw, fh,
+				mesh.Vec3{float32(a.X), float32(a.Y), centerZ},
+				mesh.Vec3{float32(b.X), float32(b.Y), centerZ},
+				halfW, halfH, rc, d.LightDir, d.AmbientFactor)
+		}
+	}
+}
 
-		for _, p := range layer.Paths {
-			if !p.Role.IsExtrusion() || len(p.Points) < 2 {
-				continue
-			}
-			// Draft pass while the camera moves: walls only, infill skipped.
-			if wallsOnly && p.Role != slice.RoleExternalPerimeter && p.Role != slice.RolePerimeter {
-				continue
-			}
-			extrW := float32(p.Width)
-			if extrW < minExtrusionWidth {
-				extrW = minExtrusionWidth
-			}
-			halfW := extrW * 0.5
+// appendBox builds one extrusion segment's box, projects its 8 corners,
+// and appends each front-facing (back-face-culled), in-front-of-near-plane
+// triangle — shaded by its face normal — to dst.
+func appendBox(dst *[]rtri, vp *ViewProj, eye mesh.Vec3, fw, fh float32, A, B mesh.Vec3, halfW, halfH float32, rc color.NRGBA, light mesh.Vec3, amb float32) {
+	dir := sub3(B, A)
+	if dot3(dir, dir) < 1e-12 {
+		return
+	}
+	dir = norm3(dir)
+	right := norm3(cross3(dir, worldUp)) // horizontal, across the bead width
+	up := norm3(cross3(right, dir))      // bead height (≈ world up for planar paths)
+	rw := scale3(right, halfW)
+	uh := scale3(up, halfH)
 
-			rc := RoleColor(p.Role)
-			baseR := float32(rc.R) / 255
-			baseG := float32(rc.G) / 255
-			baseB := float32(rc.B) / 255
+	corners := [8]mesh.Vec3{
+		sub3(sub3(A, rw), uh), sub3(add3(A, rw), uh), add3(add3(A, rw), uh), add3(sub3(A, rw), uh),
+		sub3(sub3(B, rw), uh), sub3(add3(B, rw), uh), add3(add3(B, rw), uh), add3(sub3(B, rw), uh),
+	}
+	var sx, sy, sz [8]float32
+	for ci := range corners {
+		pr := vp.Project(corners[ci])
+		if !pr.InFront {
+			return // whole box dropped if any corner is behind the near plane
+		}
+		sx[ci] = (pr.X + 1) * 0.5 * fw
+		sy[ci] = (1 - (pr.Y+1)*0.5) * fh
+		sz[ci] = pr.ViewZ
+	}
 
-			// Path-level cull: if the whole path's footprint sits beyond one
-			// edge of the viewport we can skip it without projecting any of
-			// its segments — the win that makes a zoomed-in view cheap
-			// instead of paying to project every off-screen segment just to
-			// discard it. Conservative: only skip when every bbox corner is
-			// in front of the near plane (so the projection is meaningful)
-			// AND they all fall off the same side (so a path larger than the
-			// viewport, which surrounds the screen, is never wrongly culled).
-			if pathOffscreen(&vp, &p, centerZ, x0, y0, fw, fh) {
-				continue
-			}
+	fr, fg, fb := float32(rc.R), float32(rc.G), float32(rc.B)
+	for _, f := range boxFaces {
+		n := norm3(cross3(sub3(corners[f[1]], corners[f[0]]), sub3(corners[f[2]], corners[f[0]])))
+		ctr := scale3(add3(add3(corners[f[0]], corners[f[1]]), corners[f[2]]), 1.0/3)
+		if dot3(n, sub3(ctr, eye)) > 0 {
+			continue // back face — points away from the eye
+		}
+		ndotl := -dot3(n, light)
+		if ndotl < 0 {
+			ndotl = 0
+		}
+		shade := amb + (1-amb)*ndotl
+		col := uint32(fr*shade)<<16 | uint32(fg*shade)<<8 | uint32(fb*shade)
+		*dst = append(*dst, rtri{
+			sx[f[0]], sy[f[0]], sz[f[0]],
+			sx[f[1]], sy[f[1]], sz[f[1]],
+			sx[f[2]], sy[f[2]], sz[f[2]],
+			col,
+		})
+	}
+}
 
-			n := len(p.Points)
-			segs := n - 1
-			if p.Closed {
-				segs = n
-			}
-			for i := 0; i < segs; i++ {
-				a := p.Points[i]
-				b := p.Points[(i+1)%n]
-				posA := mesh.Vec3{float32(a.X), float32(a.Y), centerZ}
-				posB := mesh.Vec3{float32(b.X), float32(b.Y), centerZ}
-				if rec, ok := d.buildSegment(&vp, x0, y0, fw, fh,
-					posA, posB, halfW, billboardHalfH, baseR, baseG, baseB); ok {
-					d.segs = append(d.segs, rec)
+// rasterize clears the buffers and scan-converts d.tris into d.rgba with a
+// per-pixel depth test, parallelized across horizontal bands so each
+// goroutine owns a disjoint set of rows (no shared-pixel contention).
+func (d *ToolpathDrawer) rasterize(w, h int) {
+	for i := range d.rgba {
+		d.rgba[i] = 0 // transparent — viewport background shows through
+	}
+	for i := range d.zbuf {
+		d.zbuf[i] = float32(math.Inf(-1))
+	}
+
+	nw := runtime.NumCPU()
+	band := (h + nw - 1) / nw
+	var wg sync.WaitGroup
+	for y0 := 0; y0 < h; y0 += band {
+		y1 := y0 + band
+		if y1 > h {
+			y1 = h
+		}
+		wg.Add(1)
+		go func(y0, y1 int) {
+			defer wg.Done()
+			d.rasterBand(w, h, y0, y1)
+		}(y0, y1)
+	}
+	wg.Wait()
+}
+
+// rasterBand rasterizes every triangle clipped to rows [y0, y1).
+func (d *ToolpathDrawer) rasterBand(w, h, y0, y1 int) {
+	for ti := range d.tris {
+		t := &d.tris[ti]
+		minX := int(math.Floor(float64(min3(t.ax, t.bx, t.cx))))
+		maxX := int(math.Ceil(float64(max3(t.ax, t.bx, t.cx))))
+		minY := int(math.Floor(float64(min3(t.ay, t.by, t.cy))))
+		maxY := int(math.Ceil(float64(max3(t.ay, t.by, t.cy))))
+		if minY < y0 {
+			minY = y0
+		}
+		if maxY >= y1 {
+			maxY = y1 - 1
+		}
+		if minX < 0 {
+			minX = 0
+		}
+		if maxX >= w {
+			maxX = w - 1
+		}
+		if minX > maxX || minY > maxY {
+			continue
+		}
+		area := (t.bx-t.ax)*(t.cy-t.ay) - (t.by-t.ay)*(t.cx-t.ax)
+		if area == 0 {
+			continue
+		}
+		inv := 1 / area
+		r := uint8(t.col >> 16)
+		g := uint8(t.col >> 8)
+		b := uint8(t.col)
+		for y := minY; y <= maxY; y++ {
+			fy := float32(y) + 0.5
+			row := y * w
+			for x := minX; x <= maxX; x++ {
+				fx := float32(x) + 0.5
+				w0 := ((t.bx-fx)*(t.cy-fy) - (t.by-fy)*(t.cx-fx)) * inv
+				w1 := ((t.cx-fx)*(t.ay-fy) - (t.cy-fy)*(t.ax-fx)) * inv
+				w2 := 1 - w0 - w1
+				if (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0) {
+					z := w0*t.az + w1*t.bz + w2*t.cz
+					idx := row + x
+					if z > d.zbuf[idx] {
+						d.zbuf[idx] = z
+						o := idx * 4
+						d.rgba[o] = r
+						d.rgba[o+1] = g
+						d.rgba[o+2] = b
+						d.rgba[o+3] = 0xff
+					}
 				}
 			}
 		}
 	}
-
-	// Painter sort by each segment's nearest-endpoint depth: furthest
-	// (most-negative view Z) first, nearer segments overdraw them.
-	sort.Slice(d.segs, func(i, j int) bool {
-		return d.segs[i].depthKey < d.segs[j].depthKey
-	})
-
-	d.buildBatches()
 }
 
 // pathOffscreen reports whether path p's whole footprint lies beyond a
 // single edge of the viewport, so all its segments can be skipped without
-// projecting them. It projects only the four corners of the path's XY
-// bounding box (at the layer's centre Z), not its potentially thousands of
-// points. Returns false (do not cull) if any corner is behind the near
-// plane, where the projection is unreliable.
-func pathOffscreen(vp *ViewProj, p *slice.Path, centerZ, x0, y0, fw, fh float32) bool {
+// building their boxes. It projects only the four corners of the path's XY
+// bounding box (at the layer's centre Z). Returns false (do not cull) if any
+// corner is behind the near plane.
+func pathOffscreen(vp *ViewProj, p *slice.Path, centerZ, fw, fh float32) bool {
 	pts := p.Points
 	minX, minY := pts[0].X, pts[0].Y
 	maxX, maxY := minX, minY
@@ -399,284 +447,44 @@ func pathOffscreen(vp *ViewProj, p *slice.Path, centerZ, x0, y0, fw, fh float32)
 	for _, c := range corners {
 		pr := vp.Project(c)
 		if !pr.InFront {
-			return false // can't trust the projection; don't cull
+			return false
 		}
-		sx := x0 + (pr.X+1)*0.5*fw
-		sy := y0 + (1-(pr.Y+1)*0.5)*fh
-		allLeft = allLeft && sx < x0
-		allRight = allRight && sx > x0+fw
-		allAbove = allAbove && sy < y0
-		allBelow = allBelow && sy > y0+fh
+		sx := (pr.X + 1) * 0.5 * fw
+		sy := (1 - (pr.Y+1)*0.5) * fh
+		allLeft = allLeft && sx < 0
+		allRight = allRight && sx > fw
+		allAbove = allAbove && sy < 0
+		allBelow = allBelow && sy > fh
 	}
 	return allLeft || allRight || allAbove || allBelow
 }
 
-// buildSegment computes the eight projected vertices for one segment and
-// returns false when any of them lands behind the near plane OR when the
-// segment's whole screen footprint falls outside the viewport rectangle
-// (off-screen culling — "only draw what's visible"). Walking through the
-// OrcaSlicer vertex shader: pick the horizontal-or-vertical sign table
-// based on the camera direction relative to the segment's cross-section
-// diagonal, place each vertex at endpoint + signs·half-axis, extend ids 2
-// & 7 along the line direction to form the spike caps, then shade
-// per-vertex using normalize(pos - endpoint) as a fake smooth normal.
-func (d *ToolpathDrawer) buildSegment(
-	vp *ViewProj,
-	x0, y0, fw, fh float32,
-	posA, posB mesh.Vec3,
-	halfW, halfH float32,
-	baseR, baseG, baseB float32,
-) (segmentBillboard, bool) {
-	eye := vp.Eye()
-	lineX := posB[0] - posA[0]
-	lineY := posB[1] - posA[1]
-	lineZ := posB[2] - posA[2]
-	lineLen := float32(math.Sqrt(float64(lineX*lineX + lineY*lineY + lineZ*lineZ)))
-	if lineLen < 1e-6 {
-		return segmentBillboard{}, false
+func min3(a, b, c float32) float32 {
+	if b < a {
+		a = b
 	}
-	lineDir := mesh.Vec3{lineX / lineLen, lineY / lineLen, lineZ / lineLen}
-
-	// line_right ⟂ line_dir in (roughly) the XY plane. For a
-	// nearly-vertical line, fall back to a fixed reference axis the
-	// way the OrcaSlicer shader does.
-	var lineRight mesh.Vec3
-	if absF(dot3(lineDir, worldUp)) > 0.9 {
-		lineRight = norm3(cross3(mesh.Vec3{1, 0, 0}, lineDir))
-	} else {
-		lineRight = norm3(cross3(lineDir, worldUp))
+	if c < a {
+		a = c
 	}
-	lineUp := norm3(cross3(lineRight, lineDir))
-
-	// diagonal_dir_border = unit vector at angle atan2(W, H) in the
-	// (line_right, line_up) plane scaled by the cross-section's
-	// half-extents. Used as the "tilt" reference for the
-	// horizontal-vs-vertical view test.
-	diagX := halfH*2*lineUp[0] + halfW*2*lineRight[0]
-	diagY := halfH*2*lineUp[1] + halfW*2*lineRight[1]
-	diagZ := halfH*2*lineUp[2] + halfW*2*lineRight[2]
-	diagLen := float32(math.Sqrt(float64(diagX*diagX + diagY*diagY + diagZ*diagZ)))
-	if diagLen < 1e-6 {
-		return segmentBillboard{}, false
-	}
-	diagDir := mesh.Vec3{diagX / diagLen, diagY / diagLen, diagZ / diagLen}
-
-	segCenter := mesh.Vec3{
-		(posA[0] + posB[0]) * 0.5,
-		(posA[1] + posB[1]) * 0.5,
-		(posA[2] + posB[2]) * 0.5,
-	}
-	viewDir := norm3(mesh.Vec3{
-		segCenter[0] - eye[0],
-		segCenter[1] - eye[1],
-		segCenter[2] - eye[2],
-	})
-
-	// Compare camera projection onto line_up vs line_right,
-	// normalised by the diagonal's projection, to pick the
-	// orientation that maximises the billboard's silhouette.
-	denomUp := absF(dot3(diagDir, lineUp))
-	denomRt := absF(dot3(diagDir, lineRight))
-	isVertical := false
-	if denomUp > 1e-6 && denomRt > 1e-6 {
-		isVertical = absF(dot3(viewDir, lineUp))/denomUp >
-			absF(dot3(viewDir, lineRight))/denomRt
-	}
-	signs := &horizontalViewSigns
-	if isVertical {
-		signs = &verticalViewSigns
-	}
-
-	negView := mesh.Vec3{-viewDir[0], -viewDir[1], -viewDir[2]}
-	viewRightSign := signF(dot3(negView, lineRight))
-	viewTopSign := signF(dot3(negView, lineUp))
-	if viewRightSign == 0 {
-		viewRightSign = 1
-	}
-	if viewTopSign == 0 {
-		viewTopSign = 1
-	}
-
-	horizontalDir := mesh.Vec3{lineRight[0] * halfW, lineRight[1] * halfW, lineRight[2] * halfW}
-	verticalDir := mesh.Vec3{lineUp[0] * halfH, lineUp[1] * halfH, lineUp[2] * halfH}
-
-	var out segmentBillboard
-	// Screen-space bounds of the eight vertices, for off-screen culling.
-	minSX, minSY := float32(math.MaxFloat32), float32(math.MaxFloat32)
-	maxSX, maxSY := -float32(math.MaxFloat32), -float32(math.MaxFloat32)
-	for vid := 0; vid < segmentVertexCount; vid++ {
-		endpoint := posA
-		if vid >= 4 {
-			endpoint = posB
-		}
-		s := signs[vid]
-		hSign := s[0] * viewRightSign
-		vSign := s[1] * viewTopSign
-
-		pos := mesh.Vec3{
-			endpoint[0] + hSign*horizontalDir[0] + vSign*verticalDir[0],
-			endpoint[1] + hSign*horizontalDir[1] + vSign*verticalDir[1],
-			endpoint[2] + hSign*horizontalDir[2] + vSign*verticalDir[2],
-		}
-		// Spike vertices (ids 2 and 7) are offset along the line
-		// direction so the segment tapers to a point at each end.
-		// Adjacent segments' spikes overlap, which hides the join
-		// without needing the GPU shader's miter math.
-		if vid == 2 || vid == 7 {
-			sign := float32(-1)
-			if vid == 7 {
-				sign = 1
-			}
-			pos[0] += sign * halfW * lineDir[0]
-			pos[1] += sign * halfW * lineDir[1]
-			pos[2] += sign * halfW * lineDir[2]
-		}
-
-		// Fake smooth normal: from the segment axis (endpoint)
-		// outward through the vertex. Matches the OrcaSlicer shader's
-		// `normalize(pos - endpoint_pos)` so the Gouraud-style
-		// gradient across each face reads as a curved tube.
-		nx := pos[0] - endpoint[0]
-		ny := pos[1] - endpoint[1]
-		nz := pos[2] - endpoint[2]
-		nLen := float32(math.Sqrt(float64(nx*nx + ny*ny + nz*nz)))
-		if nLen < 1e-6 {
-			// Spike at endpoint: use line_dir as a stand-in normal
-			// so the spike tip is shaded with the segment-axis
-			// orientation rather than going to zero.
-			sign := float32(-1)
-			if vid == 7 {
-				sign = 1
-			}
-			nx = sign * lineDir[0]
-			ny = sign * lineDir[1]
-			nz = sign * lineDir[2]
-		} else {
-			nx /= nLen
-			ny /= nLen
-			nz /= nLen
-		}
-
-		ndotL := -(nx*d.LightDir[0] + ny*d.LightDir[1] + nz*d.LightDir[2])
-		if ndotL < 0 {
-			ndotL = 0
-		}
-		shade := d.AmbientFactor + (1-d.AmbientFactor)*ndotL
-
-		pr := vp.Project(pos)
-		if !pr.InFront {
-			// Anything that pokes behind the near plane drops the
-			// whole segment. Robust near-plane clipping is a
-			// follow-up; the bounding-box-fit camera keeps the print
-			// in front in normal use.
-			return segmentBillboard{}, false
-		}
-		sx := x0 + (pr.X+1)*0.5*fw
-		sy := y0 + (1-(pr.Y+1)*0.5)*fh
-		if sx < minSX {
-			minSX = sx
-		}
-		if sx > maxSX {
-			maxSX = sx
-		}
-		if sy < minSY {
-			minSY = sy
-		}
-		if sy > maxSY {
-			maxSY = sy
-		}
-		out.verts[vid] = ebiten.Vertex{
-			DstX:   sx,
-			DstY:   sy,
-			ColorR: baseR * shade,
-			ColorG: baseG * shade,
-			ColorB: baseB * shade,
-			ColorA: 1,
-		}
-	}
-	// Off-screen cull: if the segment's whole screen footprint lies beyond
-	// any edge of the viewport, it contributes nothing — skip it so the
-	// sort and the draw only handle visible geometry. (A zoomed-in or
-	// panned view is where this pays off; when the model fits the viewport
-	// nothing is culled.)
-	if maxSX < x0 || minSX > x0+fw || maxSY < y0 || minSY > y0+fh {
-		return segmentBillboard{}, false
-	}
-	// Painter-sort key: the nearest endpoint depth (largest view Z). See
-	// segmentBillboard. Both endpoints are in front of the near plane here
-	// (any vertex behind it already returned false above).
-	za := vp.Project(posA).ViewZ
-	zb := vp.Project(posB).ViewZ
-	out.depthKey = za
-	if zb > za {
-		out.depthKey = zb
-	}
-	return out, true
+	return a
 }
 
-// buildBatches packs the painter-sorted segments into
-// [ToolpathDrawer.batches], each batch holding the 8-vertex / 8-triangle
-// templates for up to the uint16 index cap of segments. Existing batch
-// slices are reused (resliced to length 0, capacity kept) so a camera drag
-// that rebuilds every frame does not churn the allocator; trailing batches
-// left over from a larger previous frame are released and trimmed.
-func (d *ToolpathDrawer) buildBatches() {
-	// uint16 cap: 65535 indices. 24 indices per segment → 2730
-	// segments per batch.
-	const segsPerBatch = 65535 / (len(segmentTriangles) * 3)
-
-	nb := 0                 // batches used this rebuild
-	inBatch := segsPerBatch // force a fresh batch on the first segment
-	var b *drawBatch
-	for si := range d.segs {
-		if inBatch >= segsPerBatch {
-			if nb < len(d.batches) {
-				b = &d.batches[nb]
-				b.verts = b.verts[:0]
-				b.indices = b.indices[:0]
-			} else {
-				// Append first, THEN take the address: append may
-				// reallocate d.batches and invalidate an earlier pointer.
-				d.batches = append(d.batches, drawBatch{})
-				b = &d.batches[nb]
-			}
-			nb++
-			inBatch = 0
-		}
-		base := uint16(len(b.verts))
-		b.verts = append(b.verts, d.segs[si].verts[:]...)
-		for _, t := range segmentTriangles {
-			b.indices = append(b.indices, base+t[0], base+t[1], base+t[2])
-		}
-		inBatch++
+func max3(a, b, c float32) float32 {
+	if b > a {
+		a = b
 	}
-
-	// Release references held by now-unused trailing batches so their
-	// vertex/index backing arrays can be collected, then trim.
-	for i := nb; i < len(d.batches); i++ {
-		d.batches[i] = drawBatch{}
+	if c > a {
+		a = c
 	}
-	d.batches = d.batches[:nb]
+	return a
 }
 
-// drawBatches issues the cached batches. This is all a static-camera frame
-// has to do.
-func (d *ToolpathDrawer) drawBatches(dst *ebiten.Image) {
-	for i := range d.batches {
-		if len(d.batches[i].verts) == 0 {
-			continue
-		}
-		dst.DrawTriangles(d.batches[i].verts, d.batches[i].indices, getWhite(), nil)
-	}
+func sub3(a, b mesh.Vec3) mesh.Vec3 { return mesh.Vec3{a[0] - b[0], a[1] - b[1], a[2] - b[2]} }
+func add3(a, b mesh.Vec3) mesh.Vec3 { return mesh.Vec3{a[0] + b[0], a[1] + b[1], a[2] + b[2]} }
+func scale3(a mesh.Vec3, s float32) mesh.Vec3 {
+	return mesh.Vec3{a[0] * s, a[1] * s, a[2] * s}
 }
-
-// Small Vec3 helpers kept local to this file to avoid bloating the
-// mesh package with renderer-specific conveniences. All operate on
-// the package-shared [3]float32 representation.
-
-func dot3(a, b mesh.Vec3) float32 {
-	return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
-}
+func dot3(a, b mesh.Vec3) float32 { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
 
 func cross3(a, b mesh.Vec3) mesh.Vec3 {
 	return mesh.Vec3{
@@ -692,21 +500,4 @@ func norm3(v mesh.Vec3) mesh.Vec3 {
 		return mesh.Vec3{}
 	}
 	return mesh.Vec3{v[0] / l, v[1] / l, v[2] / l}
-}
-
-func absF(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func signF(x float32) float32 {
-	if x > 0 {
-		return 1
-	}
-	if x < 0 {
-		return -1
-	}
-	return 0
 }

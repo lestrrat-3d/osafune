@@ -171,15 +171,19 @@ func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBoun
 		v.raster.Draw(dst, b, v.scene, &v.cam)
 	case ViewToolpaths:
 		layers := v.layers
+		// The body always renders as a solid wall shell. topCut/botCut mark
+		// where the layer slider has been narrowed below the model's true
+		// top/bottom — at each such cut the exposed cross-section is drawn as
+		// toolpaths while the sides stay walls.
+		var topCut, botCut bool
 		if v.layerLo >= 0 && v.layerHi >= 0 && v.layerHi >= v.layerLo && v.layerHi < len(layers) {
+			topCut = v.layerHi < len(layers)-1
+			botCut = v.layerLo > 0
 			layers = layers[v.layerLo : v.layerHi+1]
 		}
-		// Signal whether the camera is being dragged; the drawer decides
-		// whether the view is dense enough to warrant the walls-only draft
-		// or can keep full detail (infill included). Full detail is restored
-		// when the drag ends (HandlePointingInput requests a redraw on
-		// release).
-		v.toolpaths.Draw(dst, b, layers, &v.cam, v.geomGen, v.drag != dragNone)
+		// v.drag != dragNone tells the drawer the camera is moving, so it can
+		// render at reduced resolution for a responsive orbit.
+		v.toolpaths.Draw(dst, b, layers, &v.cam, v.geomGen, v.drag != dragNone, topCut, botCut)
 		v.drawLegend(dst, b)
 	}
 }

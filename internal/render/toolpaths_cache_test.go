@@ -1,7 +1,6 @@
 package render
 
 import (
-	"image"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,19 +15,30 @@ func squareBounds() mesh.AABB {
 	return mesh.AABB{Min: mesh.Vec3{0, 0, 0}, Max: mesh.Vec3{10, 10, 1}}
 }
 
-// squareLayer returns a layer with one closed external-perimeter loop, so
-// the drawer has real segments to project and pack.
+// squareLayer returns a layer with a filled cross-section and a closed
+// perimeter path, so both the wall shell (from Contours) and the cut-face
+// beads (from Paths) have real geometry.
 func squareLayer(z float64) slice.Layer {
+	sq := slice.Polygon{{X: 0, Y: 0}, {X: 10, Y: 0}, {X: 10, Y: 10}, {X: 0, Y: 10}}
 	return slice.Layer{
-		Z:      z,
-		Height: 0.2,
+		Z:        z,
+		Height:   0.2,
+		Contours: []slice.ExPolygon{{Outer: sq}},
 		Paths: []slice.Path{{
-			Role:   slice.RoleExternalPerimeter,
-			Width:  0.4,
-			Closed: true,
-			Points: []slice.Point2{{X: 0, Y: 0}, {X: 10, Y: 0}, {X: 10, Y: 10}, {X: 0, Y: 10}},
+			Role: slice.RoleExternalPerimeter, Width: 0.4, Closed: true, Points: sq,
 		}},
 	}
+}
+
+// coveredPixels counts opaque (alpha != 0) pixels in the rendered buffer.
+func (d *ToolpathDrawer) coveredPixels() int {
+	n := 0
+	for i := 3; i < len(d.rgba); i += 4 {
+		if d.rgba[i] != 0 {
+			n++
+		}
+	}
+	return n
 }
 
 func TestToolpathDrawerCache(t *testing.T) {
@@ -36,88 +46,69 @@ func TestToolpathDrawerCache(t *testing.T) {
 	d := NewToolpathDrawer()
 	cam := Defaults()
 	cam.Fit(squareBounds())
-	bounds := image.Rect(0, 0, 640, 480)
+	const W, H = 640, 480
 	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
 
-	// First prepare is a cache miss (nothing built yet).
-	require.True(t, d.prepare(bounds, layers, &cam, 1, false), "first call must rebuild")
-	require.NotEmpty(t, d.batches, "rebuild should produce batches")
+	require.True(t, d.prepare(W, H, layers, &cam, 1, false, false), "first call must render")
+	require.Greater(t, d.coveredPixels(), 0, "render should cover pixels")
+	require.False(t, d.prepare(W, H, layers, &cam, 1, false, false), "unchanged inputs must reuse cache")
 
-	// Identical inputs: cache hit, no rebuild.
-	require.False(t, d.prepare(bounds, layers, &cam, 1, false), "unchanged inputs must reuse cache")
-
-	// Camera change invalidates.
 	moved := cam
 	moved.Yaw += 0.5
-	require.True(t, d.prepare(bounds, layers, &moved, 1, false), "camera change must rebuild")
-	require.False(t, d.prepare(bounds, layers, &moved, 1, false), "second identical call must hit cache")
+	require.True(t, d.prepare(W, H, layers, &moved, 1, false, false), "camera change must re-render")
+	require.False(t, d.prepare(W, H, layers, &moved, 1, false, false), "second identical call must hit cache")
 
-	// geomGen bump (new slice / layer range) invalidates.
-	require.True(t, d.prepare(bounds, layers, &moved, 2, false), "geomGen change must rebuild")
-
-	// Viewport resize invalidates.
-	require.True(t, d.prepare(image.Rect(0, 0, 800, 600), layers, &moved, 2, false), "bounds change must rebuild")
+	require.True(t, d.prepare(W, H, layers, &moved, 2, false, false), "geomGen change must re-render")
+	require.True(t, d.prepare(W/2, H/2, layers, &moved, 2, false, false), "resolution change must re-render")
+	require.True(t, d.prepare(W/2, H/2, layers, &moved, 2, true, false), "cut-flag change must re-render")
 }
 
-func TestToolpathDrawerAdaptiveDecimation(t *testing.T) {
+func TestToolpathDrawerShellAndCut(t *testing.T) {
 	t.Parallel()
-	// A layer with one perimeter loop and one infill run.
 	cam := Defaults()
 	cam.Fit(squareBounds())
-	bounds := image.Rect(0, 0, 640, 480)
-	layers := []slice.Layer{{
-		Z: 0.2, Height: 0.2,
-		Paths: []slice.Path{
-			{Role: slice.RoleExternalPerimeter, Width: 0.4, Closed: true,
-				Points: []slice.Point2{{X: 0, Y: 0}, {X: 10, Y: 0}, {X: 10, Y: 10}, {X: 0, Y: 10}}},
-			{Role: slice.RoleInfill, Width: 0.4,
-				Points: []slice.Point2{{X: 1, Y: 1}, {X: 9, Y: 1}, {X: 9, Y: 9}, {X: 1, Y: 9}}},
-		},
-	}}
+	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4), squareLayer(0.6)}
 
-	// Light view (under budget): dragging keeps full detail, infill included.
-	light := NewToolpathDrawer()
-	light.prepare(bounds, layers, &cam, 1, false) // establishes full count
-	full := len(light.segs)
-	moved := cam
-	moved.Yaw += 0.3
-	light.prepare(bounds, layers, &moved, 1, true) // interacting
-	require.Equal(t, full, len(light.segs), "a light view should keep full detail while dragging")
+	// Whole model: solid wall shell only.
+	full := NewToolpathDrawer()
+	full.prepare(640, 480, layers, &cam, 1, false, false)
+	require.NotEmpty(t, full.worldSlab, "shell geometry should be built")
+	require.Greater(t, full.coveredPixels(), 0)
+	shellTris := len(full.tris)
 
-	// Dense view (budget forced to 0): dragging drops to walls only.
-	dense := NewToolpathDrawer()
-	dense.decimationBudget = 0
-	dense.prepare(bounds, layers, &cam, 1, false) // sets lastFullSegCount > 0
-	dense.prepare(bounds, layers, &moved, 1, true)
-	require.Equal(t, 4, len(dense.segs), "over budget, a drag keeps only the 4 perimeter segments")
+	// Top cutaway: shell body + the top layer's beads overlaid → more
+	// projected triangles than the shell alone.
+	cut := NewToolpathDrawer()
+	cut.prepare(640, 480, layers, &cam, 1, true, false)
+	require.Greater(t, cut.coveredPixels(), 0)
+	require.Greater(t, len(cut.tris), shellTris, "cut face should add bead triangles")
 }
 
-func TestToolpathDrawerBatchIndexCap(t *testing.T) {
+func TestToolpathDrawerBackfaceCulled(t *testing.T) {
 	t.Parallel()
-	// Enough segments to span multiple batches, verifying the uint16 cap
-	// split: each batch's indices must stay within range of its vertices.
+	// The projected shell must be back-face culled: far faces dropped, so
+	// fewer triangles are drawn than the closed shell contains.
 	d := NewToolpathDrawer()
 	cam := Defaults()
 	cam.Fit(squareBounds())
+	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
+	d.prepare(640, 480, layers, &cam, 1, false, false)
+	require.NotEmpty(t, d.worldSlab)
+	require.Less(t, len(d.tris), len(d.worldSlab), "back faces should be culled")
+}
 
-	// ~8000 points, all inside the fitted [0,10] view so the off-screen
-	// cull keeps them; 7999 segments span several uint16-capped batches.
-	pts := make([]slice.Point2, 0, 8000)
-	for i := range cap(pts) {
-		pts = append(pts, slice.Point2{X: float64(i%100) * 0.1, Y: float64(i/100) * 0.125})
-	}
-	layers := []slice.Layer{{
-		Z: 0.2, Height: 0.2,
-		Paths: []slice.Path{{Role: slice.RoleInfill, Width: 0.4, Points: pts}},
-	}}
+func TestToolpathDrawerReducedResolution(t *testing.T) {
+	t.Parallel()
+	d := NewToolpathDrawer()
+	cam := Defaults()
+	cam.Fit(squareBounds())
+	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
 
-	d.prepare(image.Rect(0, 0, 640, 480), layers, &cam, 1, false)
-	require.Greater(t, len(d.batches), 1, "should span multiple batches")
-	for bi := range d.batches {
-		b := d.batches[bi]
-		require.LessOrEqual(t, len(b.verts), 65535, "batch vertices within uint16 range")
-		for _, idx := range b.indices {
-			require.Less(t, int(idx), len(b.verts), "index in batch %d out of range", bi)
-		}
-	}
+	d.prepare(640, 480, layers, &cam, 1, false, false)
+	full := len(d.rgba)
+	d.prepare(320, 240, layers, &cam, 1, false, false)
+	half := len(d.rgba)
+	require.Equal(t, 640*480*4, full)
+	require.Equal(t, 320*240*4, half)
+	require.Less(t, half, full)
 }
