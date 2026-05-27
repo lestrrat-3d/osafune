@@ -15,6 +15,7 @@ require (
 	github.com/lestrrat-go/polyclip v0.0.0-00010101000000-000000000000
 	github.com/lestrrat-go/stl v0.0.0-00010101000000-000000000000
 	github.com/sqweek/dialog v0.0.0-20260123140253-64c163d53aac
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
@@ -31,10 +32,12 @@ require (
 	github.com/lestrrat-go/helium v0.0.1 // indirect
 	github.com/lestrrat-go/option/v3 v3.0.0-alpha1 // indirect
 	github.com/lestrrat-go/pdebug v0.0.0-20210111095411-35b07dbf089b // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	golang.org/x/image v0.39.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.1 // indirect
 )
