@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/guigui-gui/guigui"
@@ -36,30 +38,31 @@ type FileOpener interface {
 type Root struct {
 	guigui.DefaultWidget
 
-	background       basicwidget.Background
-	openButton       basicwidget.Button
-	resetButton      basicwidget.Button
-	dropButton       basicwidget.Button
-	sliceButton      basicwidget.Button
-	meshButton       basicwidget.Button
-	saveButton       basicwidget.Button
-	patternLabel     basicwidget.Text
-	patternSelect    basicwidget.Select[config.InfillPattern]
-	densityLabel     basicwidget.Text
-	densityInput     basicwidget.NumberInput
-	objectPane       ObjectPane
-	viewport         *Viewport
-	layerSlider      LayerRangeSlider
-	opener           FileOpener
-	saver            FileSaver
+	background        basicwidget.Background
+	openButton        basicwidget.Button
+	resetButton       basicwidget.Button
+	dropButton        basicwidget.Button
+	saveProjectButton basicwidget.Button
+	sliceButton       basicwidget.Button
+	meshButton        basicwidget.Button
+	saveButton        basicwidget.Button
+	patternLabel      basicwidget.Text
+	patternSelect     basicwidget.Select[config.InfillPattern]
+	densityLabel      basicwidget.Text
+	densityInput      basicwidget.NumberInput
+	objectPane        ObjectPane
+	viewport          *Viewport
+	layerSlider       LayerRangeSlider
+	opener            FileOpener
+	saver             FileSaver
 
 	// infillPattern and infillDensityPct are the user's last selections;
 	// they override the defaults whenever runSlice runs. Density is
 	// stored as a 0-100 percent because that's what the NumberInput
 	// works with — converted to 0..1 at the boundary.
-	infillPattern      config.InfillPattern
-	infillDensityPct   int
-	infillItemsLoaded  bool // true after the first Build populated the pattern dropdown
+	infillPattern     config.InfillPattern
+	infillDensityPct  int
+	infillItemsLoaded bool // true after the first Build populated the pattern dropdown
 
 	// pendingPath, when non-empty, is a path queued for loading on the next
 	// Build pass. Setting it from Build (e.g. from the Open button's OnUp)
@@ -73,6 +76,10 @@ type Root struct {
 	// button does not need to reslice.
 	project    *project.Project
 	lastLayers []slice.Layer
+
+	// loadedPlate holds the profiles restored from an opened project .3mf, so
+	// slicing and re-saving honour them instead of the built-in defaults.
+	loadedPlate *project.Plate
 
 	// slicing tracks whether a background slice goroutine is in flight.
 	// Read and written from the UI thread only (the goroutine itself
@@ -96,6 +103,11 @@ type Root struct {
 // clicks "Open"; pass nil to hide the Open button. saver is invoked when
 // the user clicks "Save Gcode"; pass nil to hide that button.
 func NewRoot(opener FileOpener, saver FileSaver, initialPath string) *Root {
+	// Seed the on-disk profile store on first run so the default printer /
+	// filament / process profiles always exist for the user to copy or edit.
+	if err := config.EnsureDefaultProfiles(); err != nil {
+		slog.Warn("seed default profiles", "err", err)
+	}
 	defaults := config.DefaultProcess()
 	return &Root{
 		viewport:         NewViewport(),
@@ -113,6 +125,7 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.openButton)
 	adder.AddWidget(&r.resetButton)
 	adder.AddWidget(&r.dropButton)
+	adder.AddWidget(&r.saveProjectButton)
 	adder.AddWidget(&r.sliceButton)
 	adder.AddWidget(&r.meshButton)
 	adder.AddWidget(&r.saveButton)
@@ -181,6 +194,12 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	})
 	context.SetEnabled(&r.dropButton, r.viewport.Mode() == ViewMesh && r.viewport.scene != nil)
 
+	r.saveProjectButton.SetText("Save Project…")
+	r.saveProjectButton.OnUp(func(context *guigui.Context) {
+		r.saveProject()
+	})
+	context.SetEnabled(&r.saveProjectButton, r.saver != nil && r.viewport.scene != nil)
+
 	r.sliceButton.SetText("Slice")
 	r.sliceButton.OnUp(func(context *guigui.Context) {
 		r.runSlice()
@@ -224,6 +243,7 @@ func (r *Root) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBounds
 		guigui.LinearLayoutItem{Widget: &r.openButton, Size: guigui.FixedSize(5 * u)},
 		guigui.LinearLayoutItem{Widget: &r.resetButton, Size: guigui.FixedSize(6 * u)},
 		guigui.LinearLayoutItem{Widget: &r.dropButton, Size: guigui.FixedSize(6 * u)},
+		guigui.LinearLayoutItem{Widget: &r.saveProjectButton, Size: guigui.FixedSize(7 * u)},
 		guigui.LinearLayoutItem{Widget: &r.sliceButton, Size: guigui.FixedSize(5 * u)},
 		guigui.LinearLayoutItem{Widget: &r.meshButton, Size: guigui.FixedSize(6 * u)},
 		guigui.LinearLayoutItem{Widget: &r.saveButton, Size: guigui.FixedSize(7 * u)},
@@ -278,10 +298,28 @@ func (r *Root) flushPending() {
 	if path == "" {
 		return
 	}
-	scene, err := mesh.LoadFile(path)
-	if err != nil {
-		slog.Error("load failed", "path", path, "err", err)
-		return
+	// A .3mf may be one of our saved projects (geometry + embedded settings);
+	// load it through the project reader so the profiles come back too. Any
+	// other file (STL, or a plain 3MF) loads as bare geometry with defaults.
+	var scene *mesh.Scene
+	r.loadedPlate = nil
+	if strings.EqualFold(filepath.Ext(path), ".3mf") {
+		s, plate, err := project.LoadProjectFile(path)
+		if err != nil {
+			slog.Error("load failed", "path", path, "err", err)
+			return
+		}
+		scene = s
+		r.loadedPlate = plate
+		r.infillPattern = plate.Process.InfillPattern
+		r.infillDensityPct = int(plate.Process.InfillDensity*100 + 0.5)
+	} else {
+		s, err := mesh.LoadFile(path)
+		if err != nil {
+			slog.Error("load failed", "path", path, "err", err)
+			return
+		}
+		scene = s
 	}
 	// Place the scene on the build plate up-front so the viewer and the
 	// slicer share one coordinate system. Without this the viewer shows
@@ -289,6 +327,9 @@ func (r *Root) flushPending() {
 	// [project.Project.AutoArrange]) operates on a bed-centred copy, and
 	// the toolpath preview ends up offset from the visible mesh.
 	printer := config.DefaultPrinter()
+	if r.loadedPlate != nil {
+		printer = r.loadedPlate.Printer
+	}
 	placeSceneOnBed(scene, printer)
 	r.viewport.SetBedSize(printer.BedSizeX, printer.BedSizeY)
 	b := scene.Bounds()
@@ -357,14 +398,17 @@ func (r *Root) runSlice() {
 	// Snapshot the inputs at click time so a later toolbar tweak
 	// doesn't change what gets sliced mid-run.
 	scene := r.viewport.scene
-	pattern := r.infillPattern
-	densityPct := r.infillDensityPct
+	cp := r.currentPlate() // loaded/default profiles + live infill overrides
 	r.slicing = true
 	go func() {
 		proj := project.NewFromScene(scene)
 		plate := &proj.Plates[0]
-		plate.Process.InfillPattern = pattern
-		plate.Process.InfillDensity = float64(densityPct) / 100.0
+		plate.Printer = cp.Printer
+		plate.Filament = cp.Filament
+		plate.Process = cp.Process
+		// Re-arrange for the (possibly non-default) bed now that the printer
+		// is the one we'll actually slice with.
+		proj.AutoArrange(0)
 		m := proj.PlateMesh(0)
 		layers := slice.Slice(&m, &plate.Printer, &plate.Process)
 		// Buffered, 1-slot, and slicing gate prevents concurrent
@@ -451,4 +495,42 @@ func (r *Root) saveGcode() {
 		return
 	}
 	slog.Info("saved gcode", "path", path, "layers", len(r.lastLayers))
+}
+
+// currentPlate is the plate used for slicing and project saving: the profiles
+// loaded from an opened project (or the built-in defaults), with the toolbar's
+// live infill pattern / density applied on top.
+func (r *Root) currentPlate() *project.Plate {
+	plate := project.Plate{
+		Name:     "Plate 1",
+		Printer:  config.DefaultPrinter(),
+		Filament: config.DefaultFilament(),
+		Process:  config.DefaultProcess(),
+	}
+	if r.loadedPlate != nil {
+		plate = *r.loadedPlate
+	}
+	plate.Process.InfillPattern = r.infillPattern
+	plate.Process.InfillDensity = float64(r.infillDensityPct) / 100.0
+	return &plate
+}
+
+// saveProject writes the current scene + settings to a .3mf project chosen via
+// the save dialog (appending the extension if the user omitted it).
+func (r *Root) saveProject() {
+	if r.saver == nil || r.viewport.scene == nil {
+		return
+	}
+	path, ok := r.saver.PickSave("project.3mf")
+	if !ok {
+		return
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".3mf") {
+		path += ".3mf"
+	}
+	if err := project.SaveProjectFile(path, r.viewport.scene, r.currentPlate()); err != nil {
+		slog.Error("save project", "path", path, "err", err)
+		return
+	}
+	slog.Info("saved project", "path", path, "objects", len(r.viewport.scene.Objects))
 }
