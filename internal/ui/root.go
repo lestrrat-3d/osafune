@@ -279,7 +279,9 @@ func (r *Root) flushPending() {
 	// the model in its file-native location while the slicer (via
 	// [project.Project.AutoArrange]) operates on a bed-centred copy, and
 	// the toolpath preview ends up offset from the visible mesh.
-	placeSceneOnBed(scene, config.DefaultPrinter())
+	printer := config.DefaultPrinter()
+	placeSceneOnBed(scene, printer)
+	r.viewport.SetBedSize(printer.BedSizeX, printer.BedSizeY)
 	b := scene.Bounds()
 	slog.Info("loaded scene",
 		"path", path,

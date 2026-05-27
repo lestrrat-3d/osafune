@@ -49,18 +49,19 @@ func TestToolpathDrawerCache(t *testing.T) {
 	const W, H = 640, 480
 	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
 
-	require.True(t, d.prepare(W, H, layers, &cam, 1, false, false), "first call must render")
+	require.True(t, d.prepare(W, H, 1, layers, &cam, 1, false, false, false), "first call must render")
 	require.Greater(t, d.coveredPixels(), 0, "render should cover pixels")
-	require.False(t, d.prepare(W, H, layers, &cam, 1, false, false), "unchanged inputs must reuse cache")
+	require.False(t, d.prepare(W, H, 1, layers, &cam, 1, false, false, false), "unchanged inputs must reuse cache")
 
 	moved := cam
 	moved.Yaw += 0.5
-	require.True(t, d.prepare(W, H, layers, &moved, 1, false, false), "camera change must re-render")
-	require.False(t, d.prepare(W, H, layers, &moved, 1, false, false), "second identical call must hit cache")
+	require.True(t, d.prepare(W, H, 1, layers, &moved, 1, false, false, false), "camera change must re-render")
+	require.False(t, d.prepare(W, H, 1, layers, &moved, 1, false, false, false), "second identical call must hit cache")
 
-	require.True(t, d.prepare(W, H, layers, &moved, 2, false, false), "geomGen change must re-render")
-	require.True(t, d.prepare(W/2, H/2, layers, &moved, 2, false, false), "resolution change must re-render")
-	require.True(t, d.prepare(W/2, H/2, layers, &moved, 2, true, false), "cut-flag change must re-render")
+	require.True(t, d.prepare(W, H, 1, layers, &moved, 2, false, false, false), "geomGen change must re-render")
+	require.True(t, d.prepare(W/2, H/2, 1, layers, &moved, 2, false, false, false), "resolution change must re-render")
+	require.True(t, d.prepare(W/2, H/2, 1, layers, &moved, 2, true, false, false), "cut-flag change must re-render")
+	require.True(t, d.prepare(W/2, H/2, 2, layers, &moved, 2, true, false, false), "supersample change must re-render")
 }
 
 func TestToolpathDrawerShellAndCut(t *testing.T) {
@@ -71,7 +72,7 @@ func TestToolpathDrawerShellAndCut(t *testing.T) {
 
 	// Whole model: solid wall shell only.
 	full := NewToolpathDrawer()
-	full.prepare(640, 480, layers, &cam, 1, false, false)
+	full.prepare(640, 480, 1, layers, &cam, 1, false, false, false)
 	require.NotEmpty(t, full.worldSlab, "shell geometry should be built")
 	require.Greater(t, full.coveredPixels(), 0)
 	shellTris := len(full.tris)
@@ -79,7 +80,7 @@ func TestToolpathDrawerShellAndCut(t *testing.T) {
 	// Top cutaway: shell body + the top layer's beads overlaid → more
 	// projected triangles than the shell alone.
 	cut := NewToolpathDrawer()
-	cut.prepare(640, 480, layers, &cam, 1, true, false)
+	cut.prepare(640, 480, 1, layers, &cam, 1, true, false, false)
 	require.Greater(t, cut.coveredPixels(), 0)
 	require.Greater(t, len(cut.tris), shellTris, "cut face should add bead triangles")
 }
@@ -92,7 +93,7 @@ func TestToolpathDrawerBackfaceCulled(t *testing.T) {
 	cam := Defaults()
 	cam.Fit(squareBounds())
 	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
-	d.prepare(640, 480, layers, &cam, 1, false, false)
+	d.prepare(640, 480, 1, layers, &cam, 1, false, false, false)
 	require.NotEmpty(t, d.worldSlab)
 	require.Less(t, len(d.tris), len(d.worldSlab), "back faces should be culled")
 }
@@ -104,11 +105,31 @@ func TestToolpathDrawerReducedResolution(t *testing.T) {
 	cam.Fit(squareBounds())
 	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
 
-	d.prepare(640, 480, layers, &cam, 1, false, false)
+	d.prepare(640, 480, 1, layers, &cam, 1, false, false, false)
 	full := len(d.rgba)
-	d.prepare(320, 240, layers, &cam, 1, false, false)
+	d.prepare(320, 240, 1, layers, &cam, 1, false, false, false)
 	half := len(d.rgba)
 	require.Equal(t, 640*480*4, full)
 	require.Equal(t, 320*240*4, half)
 	require.Less(t, half, full)
+}
+
+// TestToolpathDrawerSupersampleAndSSAO exercises the settle path: a 2×
+// supersampled render with the SSAO pass, then box-downsample. The internal
+// buffers are ss² the output, while d.out matches the output resolution and
+// the rendered frame still covers pixels.
+func TestToolpathDrawerSupersampleAndSSAO(t *testing.T) {
+	t.Parallel()
+	d := NewToolpathDrawer()
+	cam := Defaults()
+	cam.Fit(squareBounds())
+	layers := []slice.Layer{squareLayer(0.2), squareLayer(0.4)}
+	const W, H, SS = 320, 240, 2
+
+	require.True(t, d.prepare(W, H, SS, layers, &cam, 1, false, false, true), "first settle render")
+	require.Equal(t, W*SS*H*SS*4, len(d.rgba), "raster buffer is supersampled")
+	require.Equal(t, W*SS*H*SS*3, len(d.nbuf), "normal buffer is supersampled")
+	require.Equal(t, W*H*4, len(d.out), "output buffer is screen resolution")
+	require.Greater(t, d.coveredPixels(), 0, "render should cover pixels")
+	require.False(t, d.prepare(W, H, SS, layers, &cam, 1, false, false, true), "unchanged inputs reuse cache")
 }

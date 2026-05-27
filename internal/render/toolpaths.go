@@ -21,15 +21,15 @@ import (
 func RoleColor(r slice.PathRole) color.NRGBA {
 	switch r {
 	case slice.RoleExternalPerimeter:
-		return color.NRGBA{0xe6, 0x2b, 0x2b, 0xff} // outer wall — red
+		return color.NRGBA{0xd9, 0x5c, 0x4f, 0xff} // outer wall — soft red
 	case slice.RolePerimeter:
-		return color.NRGBA{0x2e, 0xa4, 0x4f, 0xff} // inner walls — green
+		return color.NRGBA{0x4f, 0xa8, 0x6b, 0xff} // inner walls — muted green
 	case slice.RoleInfill:
-		return color.NRGBA{0xe0, 0xa8, 0x1f, 0xff} // sparse infill — amber
+		return color.NRGBA{0xd9, 0xa3, 0x4a, 0xff} // sparse infill — warm amber
 	case slice.RoleSolidInfill:
-		return color.NRGBA{0x1f, 0x8a, 0xc9, 0xff} // solid infill — cyan
+		return color.NRGBA{0x4a, 0x8f, 0xc2, 0xff} // solid infill — muted blue
 	}
-	return color.NRGBA{0x60, 0x60, 0x60, 0xff}
+	return color.NRGBA{0x80, 0x86, 0x8e, 0xff}
 }
 
 // LegendEntries returns the role/colour pairs the preview uses, in the
@@ -73,6 +73,9 @@ type LegendEntry struct {
 type ToolpathDrawer struct {
 	// LightDir is the unit direction the virtual key light shines toward.
 	LightDir mesh.Vec3
+	// FillDir is the unit direction of a dimmer secondary light, roughly
+	// opposite the key, that lifts the shadowed side so it stays legible.
+	FillDir mesh.Vec3
 	// AmbientFactor in [0,1] keeps shadowed faces readable.
 	AmbientFactor float32
 	// LineWidthPx is retained so existing callers that assign to it still
@@ -81,10 +84,15 @@ type ToolpathDrawer struct {
 
 	// target holds the most recently rendered frame; a cache hit blits it.
 	target *ebiten.Image
-	// rgba and zbuf are the reused color (premultiplied RGBA) and depth
-	// buffers the rasterizer writes into before WritePixels to target.
+	// rgba, zbuf and nbuf are the reused color (premultiplied RGBA), depth,
+	// and world-normal (3 floats/pixel) buffers the rasterizer writes into.
+	// They are sized at the internal (possibly supersampled) render
+	// resolution. out is the screen-resolution premultiplied RGBA that the
+	// supersample downsample writes and that is uploaded to target.
 	rgba []byte
 	zbuf []float32
+	nbuf []float32
+	out  []byte
 	// tris is the projected triangle list rasterized each frame (shell
 	// projection plus, in a cutaway, the interior beads). triBufs are the
 	// per-worker buffers the parallel bead projection fills.
@@ -110,25 +118,34 @@ type ToolpathDrawer struct {
 // projection + rasterization and can afford a fairly high scale.
 const dragRenderScale = 0.75
 
+// settleSupersample is the supersample factor applied once the camera settles:
+// the frame is rasterized (and SSAO'd) at ss× the output resolution and
+// box-downsampled, which anti-aliases the bead/layer edges that otherwise
+// stair-step. While dragging, ss drops to 1 (and SSAO is skipped) so an orbit
+// stays responsive.
+const settleSupersample = 2
+
 // toolpathCacheKey identifies a rendered frame. geomGen is bumped by the
-// viewport when the sliced layers or visible layer range change; cam and
-// the render dimensions (rw×rh — reduced while dragging) are the remaining
-// inputs the rendered pixels depend on. [Camera] is an all-value struct, so
-// == is a complete compare.
+// viewport when the sliced layers or visible layer range change; cam, the
+// output dimensions (ow×oh — reduced while dragging) and the supersample
+// factor ss are the remaining inputs the rendered pixels depend on. [Camera]
+// is an all-value struct, so == is a complete compare.
 type toolpathCacheKey struct {
 	geomGen        int
 	cam            Camera
-	rw, rh         int
+	ow, oh, ss     int
 	topCut, botCut bool
 }
 
 // rtri is a screen-space triangle ready to rasterize: three (x, y, viewZ)
-// vertices and a packed 0xRRGGBB colour (already shaded). Larger viewZ is
-// nearer the eye.
+// vertices, the world-space face normal (written per-pixel into the normal
+// buffer for the SSAO pass), and a packed 0xRRGGBB colour (already shaded).
+// Larger viewZ is nearer the eye.
 type rtri struct {
 	ax, ay, az float32
 	bx, by, bz float32
 	cx, cy, cz float32
+	nx, ny, nz float32
 	col        uint32
 }
 
@@ -157,7 +174,8 @@ var worldUp = mesh.Vec3{0, 0, 1}
 func NewToolpathDrawer() *ToolpathDrawer {
 	return &ToolpathDrawer{
 		LightDir:      norm3(mesh.Vec3{-0.4, -0.5, -0.8}),
-		AmbientFactor: 0.4,
+		FillDir:       norm3(mesh.Vec3{0.6, 0.5, -0.25}),
+		AmbientFactor: 0.3,
 		LineWidthPx:   1.5,
 		slabGeomGen:   -1, // force a build on the first thick render
 	}
@@ -179,21 +197,24 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 	if w <= 0 || h <= 0 || len(layers) == 0 {
 		return
 	}
-	rw, rh := w, h
+	// Output resolution: full while still, reduced while dragging. Supersample
+	// (and SSAO) only when settled; a drag trades both for responsiveness.
+	ow, oh, ss := w, h, settleSupersample
 	if interacting {
-		rw = max(1, int(float64(w)*dragRenderScale))
-		rh = max(1, int(float64(h)*dragRenderScale))
+		ow = max(1, int(float64(w)*dragRenderScale))
+		oh = max(1, int(float64(h)*dragRenderScale))
+		ss = 1
 	}
-	rebuilt := d.prepare(rw, rh, layers, cam, geomGen, topCut, botCut)
-	if d.target == nil || d.target.Bounds().Dx() != rw || d.target.Bounds().Dy() != rh {
-		d.target = ebiten.NewImage(rw, rh)
+	rebuilt := d.prepare(ow, oh, ss, layers, cam, geomGen, topCut, botCut, !interacting)
+	if d.target == nil || d.target.Bounds().Dx() != ow || d.target.Bounds().Dy() != oh {
+		d.target = ebiten.NewImage(ow, oh)
 		rebuilt = true // fresh target needs the pixels uploaded
 	}
 	if rebuilt {
-		d.target.WritePixels(d.rgba)
+		d.target.WritePixels(d.out)
 	}
 	op := &ebiten.DrawImageOptions{}
-	op.GeoM.Scale(float64(w)/float64(rw), float64(h)/float64(rh)) // upscale reduced-res frames
+	op.GeoM.Scale(float64(w)/float64(ow), float64(h)/float64(oh)) // upscale reduced-res drag frames
 	op.GeoM.Translate(float64(dstBounds.Min.X), float64(dstBounds.Min.Y))
 	dst.DrawImage(d.target, op)
 }
@@ -206,14 +227,19 @@ func (d *ToolpathDrawer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, laye
 // The body is always the solid wall shell (camera-independent geometry
 // built once per geomGen, then projected). At a cut (topCut/botCut), that
 // boundary layer's toolpaths are overlaid on the exposed cross-section.
-func (d *ToolpathDrawer) prepare(rw, rh int, layers []slice.Layer, cam *Camera, geomGen int, topCut, botCut bool) bool {
-	key := toolpathCacheKey{geomGen: geomGen, cam: *cam, rw: rw, rh: rh, topCut: topCut, botCut: botCut}
-	if d.cacheValid && key == d.cacheKey && len(d.rgba) == rw*rh*4 {
+func (d *ToolpathDrawer) prepare(ow, oh, ss int, layers []slice.Layer, cam *Camera, geomGen int, topCut, botCut, doSSAO bool) bool {
+	key := toolpathCacheKey{geomGen: geomGen, cam: *cam, ow: ow, oh: oh, ss: ss, topCut: topCut, botCut: botCut}
+	if d.cacheValid && key == d.cacheKey && len(d.out) == ow*oh*4 {
 		return false
 	}
+	rw, rh := ow*ss, oh*ss
 	if len(d.rgba) != rw*rh*4 {
 		d.rgba = make([]byte, rw*rh*4)
 		d.zbuf = make([]float32, rw*rh)
+		d.nbuf = make([]float32, rw*rh*3)
+	}
+	if len(d.out) != ow*oh*4 {
+		d.out = make([]byte, ow*oh*4)
 	}
 
 	vp := cam.ViewProj(float32(rw) / float32(rh))
@@ -234,10 +260,48 @@ func (d *ToolpathDrawer) prepare(rw, rh int, layers []slice.Layer, cam *Camera, 
 		d.appendBeads(layers, &vp, rw, rh)
 	}
 	d.rasterize(rw, rh)
+	if doSSAO {
+		d.ssao(rw, rh, ss, &vp)
+	}
+	d.downsample(ow, oh, ss)
 
 	d.cacheKey = key
 	d.cacheValid = true
 	return true
+}
+
+// downsample box-filters the rw×rh (= ow*ss × oh*ss) render buffer d.rgba into
+// the ow×oh output buffer d.out, averaging each ss×ss block. The rgba bytes
+// are effectively premultiplied (covered pixels are opaque, background pixels
+// are zero), so a plain average yields correct coverage-weighted anti-aliasing
+// against the environment behind the blit. ss==1 is a straight copy.
+func (d *ToolpathDrawer) downsample(ow, oh, ss int) {
+	if ss == 1 {
+		copy(d.out, d.rgba)
+		return
+	}
+	rw := ow * ss
+	n := ss * ss
+	for oy := 0; oy < oh; oy++ {
+		for ox := 0; ox < ow; ox++ {
+			var r, g, b, a int
+			for dy := 0; dy < ss; dy++ {
+				base := ((oy*ss+dy)*rw + ox*ss) * 4
+				for dx := 0; dx < ss; dx++ {
+					o := base + dx*4
+					r += int(d.rgba[o])
+					g += int(d.rgba[o+1])
+					b += int(d.rgba[o+2])
+					a += int(d.rgba[o+3])
+				}
+			}
+			o := (oy*ow + ox) * 4
+			d.out[o] = byte(r / n)
+			d.out[o+1] = byte(g / n)
+			d.out[o+2] = byte(b / n)
+			d.out[o+3] = byte(a / n)
+		}
+	}
 }
 
 // appendBeads projects every visible layer's extrusion-path beads and
@@ -273,7 +337,7 @@ func (d *ToolpathDrawer) appendBeads(layers []slice.Layer, vp *ViewProj, w, h in
 			eye := vp.Eye()
 			fw, fh := float32(w), float32(h)
 			for li := lo; li < hi; li++ {
-				buf = appendLayerBeads(buf, &layers[li], vp, eye, fw, fh, d.LightDir, d.AmbientFactor)
+				buf = appendLayerBeads(buf, &layers[li], vp, eye, fw, fh, d.LightDir, d.FillDir, d.AmbientFactor)
 			}
 			d.triBufs[wi] = buf
 		}(wi, lo, hi)
@@ -285,7 +349,7 @@ func (d *ToolpathDrawer) appendBeads(layers []slice.Layer, vp *ViewProj, w, h in
 }
 
 // appendLayerBeads appends one layer's extrusion-path beads (boxes) to dst.
-func appendLayerBeads(dst []rtri, layer *slice.Layer, vp *ViewProj, eye mesh.Vec3, fw, fh float32, light mesh.Vec3, amb float32) []rtri {
+func appendLayerBeads(dst []rtri, layer *slice.Layer, vp *ViewProj, eye mesh.Vec3, fw, fh float32, light, fill mesh.Vec3, amb float32) []rtri {
 	layerH := float32(layer.Height)
 	if layerH < minLayerHeight {
 		layerH = minLayerHeight
@@ -317,7 +381,7 @@ func appendLayerBeads(dst []rtri, layer *slice.Layer, vp *ViewProj, eye mesh.Vec
 			appendBox(&dst, vp, eye, fw, fh,
 				mesh.Vec3{float32(a.X), float32(a.Y), centerZ},
 				mesh.Vec3{float32(b.X), float32(b.Y), centerZ},
-				halfW, halfH, rc, light, amb)
+				halfW, halfH, rc, light, fill, amb)
 		}
 	}
 	return dst
@@ -326,7 +390,7 @@ func appendLayerBeads(dst []rtri, layer *slice.Layer, vp *ViewProj, eye mesh.Vec
 // appendBox builds one extrusion segment's box, projects its 8 corners,
 // and appends each front-facing (back-face-culled), in-front-of-near-plane
 // triangle — shaded by its face normal — to dst.
-func appendBox(dst *[]rtri, vp *ViewProj, eye mesh.Vec3, fw, fh float32, A, B mesh.Vec3, halfW, halfH float32, rc color.NRGBA, light mesh.Vec3, amb float32) {
+func appendBox(dst *[]rtri, vp *ViewProj, eye mesh.Vec3, fw, fh float32, A, B mesh.Vec3, halfW, halfH float32, rc color.NRGBA, light, fill mesh.Vec3, amb float32) {
 	dir := sub3(B, A)
 	if dot3(dir, dir) < 1e-12 {
 		return
@@ -359,16 +423,12 @@ func appendBox(dst *[]rtri, vp *ViewProj, eye mesh.Vec3, fw, fh float32, A, B me
 		if dot3(n, sub3(ctr, eye)) > 0 {
 			continue // back face — points away from the eye
 		}
-		ndotl := -dot3(n, light)
-		if ndotl < 0 {
-			ndotl = 0
-		}
-		shade := amb + (1-amb)*ndotl
-		col := uint32(fr*shade)<<16 | uint32(fg*shade)<<8 | uint32(fb*shade)
+		col := shadePacked(fr, fg, fb, n, light, fill, amb)
 		*dst = append(*dst, rtri{
 			sx[f[0]], sy[f[0]], sz[f[0]],
 			sx[f[1]], sy[f[1]], sz[f[1]],
 			sx[f[2]], sy[f[2]], sz[f[2]],
+			n[0], n[1], n[2],
 			col,
 		})
 	}
@@ -383,6 +443,9 @@ func (d *ToolpathDrawer) rasterize(w, h int) {
 	}
 	for i := range d.zbuf {
 		d.zbuf[i] = float32(math.Inf(-1))
+	}
+	for i := range d.nbuf {
+		d.nbuf[i] = 0
 	}
 
 	nw := runtime.NumCPU()
@@ -451,6 +514,10 @@ func (d *ToolpathDrawer) rasterBand(w, h, y0, y1 int) {
 						d.rgba[o+1] = g
 						d.rgba[o+2] = b
 						d.rgba[o+3] = 0xff
+						ni := idx * 3
+						d.nbuf[ni] = t.nx
+						d.nbuf[ni+1] = t.ny
+						d.nbuf[ni+2] = t.nz
 					}
 				}
 			}

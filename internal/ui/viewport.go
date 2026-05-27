@@ -14,6 +14,7 @@ import (
 
 	"github.com/guigui-gui/guigui"
 
+	"github.com/lestrrat-go/makislicer/internal/config"
 	"github.com/lestrrat-go/makislicer/internal/mesh"
 	"github.com/lestrrat-go/makislicer/internal/render"
 	"github.com/lestrrat-go/makislicer/internal/slice"
@@ -44,14 +45,19 @@ const (
 type Viewport struct {
 	guigui.DefaultWidget
 
-	scene      *mesh.Scene
-	layers     []slice.Layer
-	mode       ViewMode
-	cam        render.Camera
-	raster     *render.Rasterizer
-	toolpaths  *render.ToolpathDrawer
-	dirty      bool // becomes true when the scene changes; Layout fits the camera on the next pass.
-	background color.NRGBA
+	scene     *mesh.Scene
+	layers    []slice.Layer
+	mode      ViewMode
+	cam       render.Camera
+	raster    *render.Rasterizer
+	toolpaths *render.ToolpathDrawer
+	env       *render.Environment
+	dirty     bool // becomes true when the scene changes; Layout fits the camera on the next pass.
+
+	// bedX/bedY are the build-plate dimensions (mm) the environment draws.
+	// Defaulted from config.DefaultPrinter; SetBedSize updates them when a
+	// project with a specific printer is loaded.
+	bedX, bedY float64
 
 	// layerLo/layerHi clip which sliced layers the toolpath previewer
 	// renders. Inclusive bounds; both -1 means "show every layer". The
@@ -72,14 +78,24 @@ type Viewport struct {
 // NewViewport returns a Viewport with default camera/rasterizer. Set a mesh
 // later via SetMesh.
 func NewViewport() *Viewport {
+	dp := config.DefaultPrinter()
 	return &Viewport{
-		cam:        render.Defaults(),
-		raster:     render.New(),
-		toolpaths:  render.NewToolpathDrawer(),
-		background: color.NRGBA{R: 0xdc, G: 0xdc, B: 0xdc, A: 0xff},
-		layerLo:    -1,
-		layerHi:    -1,
+		cam:       render.Defaults(),
+		raster:    render.New(),
+		toolpaths: render.NewToolpathDrawer(),
+		env:       render.NewEnvironment(),
+		bedX:      dp.BedSizeX,
+		bedY:      dp.BedSizeY,
+		layerLo:   -1,
+		layerHi:   -1,
 	}
+}
+
+// SetBedSize updates the build-plate dimensions (mm) the environment draws.
+// Called when a project selects a printer with a bed other than the default.
+func (v *Viewport) SetBedSize(x, y float64) {
+	v.bedX, v.bedY = x, y
+	guigui.RequestRedraw(v)
 }
 
 // SetLayers swaps to toolpath-preview mode showing layers. The mesh
@@ -165,7 +181,12 @@ func (v *Viewport) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBo
 // the sliced toolpaths depending on the active [ViewMode].
 func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBounds, dst *ebiten.Image) {
 	b := widgetBounds.Bounds()
-	dst.SubImage(b).(*ebiten.Image).Fill(v.background)
+	sub := dst.SubImage(b).(*ebiten.Image)
+	// Gradient backdrop + build plate are drawn first; the mesh raster and the
+	// toolpath drawer both leave their output transparent where no geometry
+	// covers, so they composite cleanly on top of the environment.
+	v.env.DrawBackground(sub, b)
+	v.env.DrawPlate(sub, b, &v.cam, v.bedX, v.bedY)
 	switch v.mode {
 	case ViewMesh:
 		v.raster.Draw(dst, b, v.scene, &v.cam)

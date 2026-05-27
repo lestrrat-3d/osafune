@@ -170,6 +170,28 @@ func (v *ViewProj) Project(p mesh.Vec3) Projected {
 	return Projected{X: nx, Y: ny, ViewZ: zv, InFront: true}
 }
 
+// Unproject is the inverse of [ViewProj.Project] followed by the NDC→screen
+// map the rasterizer uses: given a pixel (sx, sy) in a fw×fh viewport and the
+// view-space depth viewZ recorded for that pixel, it returns the world point
+// that projected there. The SSAO pass uses it to turn the depth buffer back
+// into world positions so it can measure occlusion between neighbouring
+// surfaces. viewZ is negative in front of the camera (as stored by Project).
+func (v *ViewProj) Unproject(sx, sy, fw, fh, viewZ float32) mesh.Vec3 {
+	ndcX := sx/fw*2 - 1
+	ndcY := 1 - sy/fh*2
+	// Invert the perspective divide: Project did nx = xv*fx/-zv.
+	xv := ndcX * -viewZ / v.fx
+	yv := ndcY * -viewZ / v.fy
+	// View basis is orthonormal, so world = eye + xv*right + yv*up + fwd*forward
+	// where the forward component is -viewZ (Project negated it).
+	fwd := -viewZ
+	return mesh.Vec3{
+		v.eye[0] + xv*v.right[0] + yv*v.up[0] + fwd*v.forward[0],
+		v.eye[1] + xv*v.right[1] + yv*v.up[1] + fwd*v.forward[1],
+		v.eye[2] + xv*v.right[2] + yv*v.up[2] + fwd*v.forward[2],
+	}
+}
+
 // PanScreen moves Target by the given screen-space deltas (in pixels). The
 // deltas are converted to world units at the depth of the current Target so
 // the model tracks the cursor at a sensible rate regardless of zoom.

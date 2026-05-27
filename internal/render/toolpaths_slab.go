@@ -33,14 +33,11 @@ type wtri struct {
 func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut bool) {
 	wall := RoleColor(slice.RoleExternalPerimeter)
 	light := d.LightDir
+	fill := d.FillDir
 	amb := d.AmbientFactor
+	wr, wg, wb := float32(wall.R), float32(wall.G), float32(wall.B)
 	shade := func(n mesh.Vec3) uint32 {
-		ndotl := -dot3(n, light)
-		if ndotl < 0 {
-			ndotl = 0
-		}
-		s := amb + (1-amb)*ndotl
-		return uint32(float32(wall.R)*s)<<16 | uint32(float32(wall.G)*s)<<8 | uint32(float32(wall.B)*s)
+		return shadePacked(wr, wg, wb, n, light, fill, amb)
 	}
 	up := mesh.Vec3{0, 0, 1}
 	down := mesh.Vec3{0, 0, -1}
@@ -214,6 +211,7 @@ func projectSlabRange(dst []rtri, src []wtri, vp *ViewProj, eye mesh.Vec3, fw, f
 			(pa.X + 1) * 0.5 * fw, (1 - (pa.Y+1)*0.5) * fh, pa.ViewZ,
 			(pb.X + 1) * 0.5 * fw, (1 - (pb.Y+1)*0.5) * fh, pb.ViewZ,
 			(pc.X + 1) * 0.5 * fw, (1 - (pc.Y+1)*0.5) * fh, pc.ViewZ,
+			t.n[0], t.n[1], t.n[2],
 			t.col,
 		})
 	}
