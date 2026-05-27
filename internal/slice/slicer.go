@@ -44,9 +44,12 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 	// ~one fifth of a line wide.)
 	solid, sparse := ClassifySkin(fillAreas, process.TopLayers, process.BottomLayers, process.LineWidth/5)
 
-	// Pass 3: lay down the actual fill.
+	// Pass 3: lay down the actual fill, then reorder each layer's paths to
+	// minimise non-extruding travel (boustrophedon infill, nearest-first
+	// loops) without disturbing the wall→infill phase order.
 	for i := range layers {
 		GenerateInfill(&layers[i], solid[i], sparse[i], process)
+		OptimizeTravel(&layers[i])
 	}
 	return layers
 }
