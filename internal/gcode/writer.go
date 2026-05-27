@@ -117,6 +117,28 @@ func (g *Writer) setFan(pwm int) error {
 	return err
 }
 
+// zhopUp lifts the nozzle by the filament's ZHop above the current layer
+// height for the duration of a travel, so it clears already-printed walls
+// rather than scraping across them. g.z stays at the base layer height — only
+// the emitted Z changes — so zhopDown can restore it. No-op when disabled.
+func (g *Writer) zhopUp() error {
+	if g.filament.ZHop <= 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(g.w, "G1 Z%.3f ; z-hop\n", g.z+g.filament.ZHop)
+	return err
+}
+
+// zhopDown returns the nozzle to the base layer height at the travel's
+// destination, before the next extrusion. No-op when z-hop is disabled.
+func (g *Writer) zhopDown() error {
+	if g.filament.ZHop <= 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(g.w, "G1 Z%.3f\n", g.z)
+	return err
+}
+
 // WriteHeader emits the comment header and start gcode. Call once before
 // [Writer.WriteLayer] is called for the first layer. The header carries
 // every relevant config value so a gcode previewer (or a human) can
@@ -150,6 +172,8 @@ func (g *Writer) WriteHeader(layers []slice.Layer) error {
 	fmt.Fprintf(&header, "; bed_temperature: %d\n", g.filament.BedTemp)
 	fmt.Fprintf(&header, "; retract_length: %.3f\n", g.filament.RetractLength)
 	fmt.Fprintf(&header, "; retract_speed: %.0f\n", g.filament.RetractSpeed)
+	fmt.Fprintf(&header, "; z_hop: %.3f\n", g.filament.ZHop)
+	fmt.Fprintf(&header, "; seam_position: %s\n", g.process.SeamPosition)
 	fmt.Fprintf(&header, "; fan_speed: %d\n", g.filament.FanSpeed)
 	fmt.Fprintf(&header, "; total_layer_count: %d\n", totalLayers)
 	fmt.Fprintf(&header, "; max_z_height: %.3f\n", maxZ)
@@ -247,11 +271,18 @@ func (g *Writer) writePath(p *slice.Path, layerHeight float64) error {
 			if err := g.retract(); err != nil {
 				return err
 			}
+			// Lift after retracting so the hopped travel clears printed walls.
+			if err := g.zhopUp(); err != nil {
+				return err
+			}
 		}
 		if err := g.travel(start, g.process.TravelSpeed); err != nil {
 			return err
 		}
 		if retractHere {
+			if err := g.zhopDown(); err != nil {
+				return err
+			}
 			if err := g.unretract(); err != nil {
 				return err
 			}

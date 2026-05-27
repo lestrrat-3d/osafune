@@ -35,6 +35,21 @@ const (
 	InfillConcentric InfillPattern = "concentric"
 )
 
+// SeamPosition selects where the visible start/stop "seam" of a closed
+// perimeter loop is placed. OrcaSlicer offers more (nearest, back, sharpest
+// corner); the MVP supports the two that cover most needs.
+type SeamPosition string
+
+const (
+	// SeamAligned places every layer's seam at the same reference corner
+	// (the rear-most vertex) so the seams stack into one tidy vertical line
+	// — the OrcaSlicer/PrusaSlicer default look.
+	SeamAligned SeamPosition = "aligned"
+	// SeamRandom scatters the seam to a different vertex each layer, hiding
+	// it on organic shapes at the cost of a faint speckle instead of a line.
+	SeamRandom SeamPosition = "random"
+)
+
 // GcodeFlavor selects which dialect of gcode the emitter produces. OrcaSlicer
 // supports several; the MVP emitter is Marlin-with-OrcaSlicer-comment-headers
 // since every Bambu/Voron/Prusa/generic-Marlin printer accepts that subset,
@@ -127,6 +142,7 @@ type Filament struct {
 	FlowRatio      float64 // 1.0 = nominal
 	RetractLength  float64 // mm
 	RetractSpeed   float64 // mm/s
+	ZHop           float64 // mm, nozzle lift during a retracted travel; 0 disables
 	FanSpeed       int     // 0-255, part cooling fan speed after first few layers
 	FilamentDensity float64 // g/cm^3, used for weight estimates in header
 }
@@ -141,6 +157,7 @@ func DefaultFilament() Filament {
 		FlowRatio:       1.0,
 		RetractLength:   0.8,
 		RetractSpeed:    35,
+		ZHop:            0.4,
 		FanSpeed:        255,
 		FilamentDensity: 1.24,
 	}
@@ -172,6 +189,10 @@ type Process struct {
 	// InfillPattern selects the fill geometry. See [InfillPattern].
 	InfillPattern InfillPattern
 
+	// SeamPosition selects where closed-loop seams are placed. See
+	// [SeamPosition]. Empty is treated as [SeamAligned].
+	SeamPosition SeamPosition
+
 	// Speeds, all mm/s.
 	TravelSpeed            float64
 	PerimeterSpeed         float64
@@ -201,6 +222,7 @@ func DefaultProcess() Process {
 		BottomLayers:           3,
 		InfillDensity:          0.15,
 		InfillPattern:          InfillGrid,
+		SeamPosition:           SeamAligned,
 		TravelSpeed:            200,
 		PerimeterSpeed:         60,
 		ExternalPerimeterSpeed: 40,
