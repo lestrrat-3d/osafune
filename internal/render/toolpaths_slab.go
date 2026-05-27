@@ -45,6 +45,7 @@ func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut boo
 	up := mesh.Vec3{0, 0, 1}
 	down := mesh.Vec3{0, 0, -1}
 	colUp, colDown := shade(up), shade(down)
+	cutaway := topCut || botCut
 
 	out := d.worldSlab[:0]
 	for li := range layers {
@@ -59,23 +60,20 @@ func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut boo
 		z1 := float32(l.Z)      // top of layer
 		z0 := z1 - layerH       // bottom of layer
 
-		// At a cut, omit that boundary layer's exposed cap so the cut-face
-		// toolpaths (drawn separately) are not hidden behind a wall cap.
-		skipTop := topCut && li == len(layers)-1
-		skipBottom := botCut && li == 0
-
-		// Caps: triangulate the filled cross-section (handles holes).
-		if !skipTop || !skipBottom {
+		// Caps fill a layer's whole cross-section solid. That is what makes
+		// the closed exterior read as a solid top/bottom — but in a cutaway
+		// every layer's cap would stack into a solid slab the beads sit on,
+		// so the sparse infill appears to float on a solid wall-coloured
+		// floor. So caps are built only for the un-cut (closed) view; in a
+		// cutaway the side walls enclose the sides and the per-layer beads
+		// (drawn separately) supply the genuine cross-section instead.
+		if !cutaway {
 			for _, tr := range triangulateContours(l.Contours) {
 				ax, ay := float32(tr[0].X), float32(tr[0].Y)
 				bx, by := float32(tr[1].X), float32(tr[1].Y)
 				cx, cy := float32(tr[2].X), float32(tr[2].Y)
-				if !skipTop { // top cap faces +Z
-					out = append(out, wtri{mesh.Vec3{ax, ay, z1}, mesh.Vec3{bx, by, z1}, mesh.Vec3{cx, cy, z1}, up, colUp})
-				}
-				if !skipBottom { // bottom cap faces -Z (reverse winding)
-					out = append(out, wtri{mesh.Vec3{ax, ay, z0}, mesh.Vec3{cx, cy, z0}, mesh.Vec3{bx, by, z0}, down, colDown})
-				}
+				out = append(out, wtri{mesh.Vec3{ax, ay, z1}, mesh.Vec3{bx, by, z1}, mesh.Vec3{cx, cy, z1}, up, colUp})       // top cap +Z
+				out = append(out, wtri{mesh.Vec3{ax, ay, z0}, mesh.Vec3{cx, cy, z0}, mesh.Vec3{bx, by, z0}, down, colDown}) // bottom cap -Z
 			}
 		}
 

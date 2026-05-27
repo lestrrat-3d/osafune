@@ -68,8 +68,8 @@ type LegendEntry struct {
 // Ebiten has no GPU depth buffer, so the rasterizer is CPU-side and
 // parallel. The rendered image is cached and only rebuilt when the camera,
 // viewport, or sliced geometry changes (see [toolpathCacheKey]); a static
-// view costs only a blit. While the camera is being dragged the drawer can
-// fall back to a decimated walls-only pass to stay responsive.
+// view costs only a blit. While the camera is being dragged the frame is
+// rendered at a reduced resolution and upscaled, to keep an orbit responsive.
 type ToolpathDrawer struct {
 	// LightDir is the unit direction the virtual key light shines toward.
 	LightDir mesh.Vec3
@@ -86,8 +86,10 @@ type ToolpathDrawer struct {
 	rgba []byte
 	zbuf []float32
 	// tris is the projected triangle list rasterized each frame (shell
-	// projection plus any cut-face beads).
-	tris []rtri
+	// projection plus, in a cutaway, the interior beads). triBufs are the
+	// per-worker buffers the parallel bead projection fills.
+	tris    []rtri
+	triBufs [][]rtri
 
 	// worldSlab is the camera-independent solid wall shell (built once per
 	// geometry change, keyed by slabGeomGen); slabBufs are the per-worker
@@ -114,8 +116,8 @@ const dragRenderScale = 0.75
 // inputs the rendered pixels depend on. [Camera] is an all-value struct, so
 // == is a complete compare.
 type toolpathCacheKey struct {
-	geomGen    int
-	cam        Camera
+	geomGen        int
+	cam            Camera
 	rw, rh         int
 	topCut, botCut bool
 }
@@ -223,14 +225,13 @@ func (d *ToolpathDrawer) prepare(rw, rh int, layers []slice.Layer, cam *Camera, 
 		d.slabGeomGen = geomGen
 	}
 	d.projectSlab(rw, rh, &vp)
-	// Cut faces: at each cut, overlay that boundary layer's actual toolpath
-	// beads, so the exposed cross-section reads as paths/infill while the
-	// sides stay walls.
-	if topCut {
-		d.appendLayerBeads(&layers[len(layers)-1], &vp, rw, rh)
-	}
-	if botCut && len(layers) > 1 {
-		d.appendLayerBeads(&layers[0], &vp, rw, rh)
+	// Cutaway: overlay the real toolpath beads of every visible layer. The
+	// shell side walls occlude them on the sides (so the exterior stays
+	// walls), while the open cut faces reveal the genuine cross-section and
+	// the infill lattice going down — instead of a solid wall behind the
+	// cut layer's sparse lines.
+	if topCut || botCut {
+		d.appendBeads(layers, &vp, rw, rh)
 	}
 	d.rasterize(rw, rh)
 
@@ -239,12 +240,52 @@ func (d *ToolpathDrawer) prepare(rw, rh int, layers []slice.Layer, cam *Camera, 
 	return true
 }
 
-// appendLayerBeads appends one layer's extrusion-path beads (boxes) to
-// d.tris — used to render a cutaway's exposed cross-section as toolpaths on
-// top of the projected wall shell.
-func (d *ToolpathDrawer) appendLayerBeads(layer *slice.Layer, vp *ViewProj, w, h int) {
-	eye := vp.Eye()
-	fw, fh := float32(w), float32(h)
+// appendBeads projects every visible layer's extrusion-path beads and
+// appends them to d.tris, parallelized over layers into reused per-worker
+// buffers (the same pattern as the shell projection).
+func (d *ToolpathDrawer) appendBeads(layers []slice.Layer, vp *ViewProj, w, h int) {
+	nw := runtime.NumCPU()
+	if nw > len(layers) {
+		nw = len(layers)
+	}
+	if nw < 1 {
+		nw = 1
+	}
+	if len(d.triBufs) != nw {
+		d.triBufs = make([][]rtri, nw)
+	}
+	chunk := (len(layers) + nw - 1) / nw
+	var wg sync.WaitGroup
+	for wi := 0; wi < nw; wi++ {
+		lo := wi * chunk
+		hi := lo + chunk
+		if hi > len(layers) {
+			hi = len(layers)
+		}
+		if lo >= hi {
+			d.triBufs[wi] = d.triBufs[wi][:0]
+			continue
+		}
+		wg.Add(1)
+		go func(wi, lo, hi int) {
+			defer wg.Done()
+			buf := d.triBufs[wi][:0]
+			eye := vp.Eye()
+			fw, fh := float32(w), float32(h)
+			for li := lo; li < hi; li++ {
+				buf = appendLayerBeads(buf, &layers[li], vp, eye, fw, fh, d.LightDir, d.AmbientFactor)
+			}
+			d.triBufs[wi] = buf
+		}(wi, lo, hi)
+	}
+	wg.Wait()
+	for wi := 0; wi < nw; wi++ {
+		d.tris = append(d.tris, d.triBufs[wi]...)
+	}
+}
+
+// appendLayerBeads appends one layer's extrusion-path beads (boxes) to dst.
+func appendLayerBeads(dst []rtri, layer *slice.Layer, vp *ViewProj, eye mesh.Vec3, fw, fh float32, light mesh.Vec3, amb float32) []rtri {
 	layerH := float32(layer.Height)
 	if layerH < minLayerHeight {
 		layerH = minLayerHeight
@@ -273,12 +314,13 @@ func (d *ToolpathDrawer) appendLayerBeads(layer *slice.Layer, vp *ViewProj, w, h
 		for i := 0; i < nseg; i++ {
 			a := p.Points[i]
 			b := p.Points[(i+1)%n]
-			appendBox(&d.tris, vp, eye, fw, fh,
+			appendBox(&dst, vp, eye, fw, fh,
 				mesh.Vec3{float32(a.X), float32(a.Y), centerZ},
 				mesh.Vec3{float32(b.X), float32(b.Y), centerZ},
-				halfW, halfH, rc, d.LightDir, d.AmbientFactor)
+				halfW, halfH, rc, light, amb)
 		}
 	}
+	return dst
 }
 
 // appendBox builds one extrusion segment's box, projects its 8 corners,
