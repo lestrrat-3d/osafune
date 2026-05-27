@@ -111,6 +111,55 @@ func regionsBBox(regions []ExPolygon) (min, max Point2, ok bool) {
 	return min, max, ok
 }
 
+// dropThinRegions removes connected components whose mean width is below
+// minWidth, leaving wider ones untouched. Mean width is estimated as
+// 2·netArea/perimeter — exact for a long strip, and a sound "is this a
+// sliver?" test for the exposure diffs: a thin frame or speck has a tiny
+// width regardless of how long it is, while a genuine roof/floor patch is
+// broad. A non-positive minWidth or empty input is a no-op.
+//
+// This replaces a morphological opening: polyclip.Offset moves a region's
+// outer and hole rings by the same signed step, so eroding a thin frame
+// shrinks both rings together and never collapses the band — opening can
+// only delete features thin in BOTH axes, not thin rings. A direct
+// mean-width test removes ring-shaped slivers that opening leaves behind.
+func dropThinRegions(regions []ExPolygon, minWidth float64) []ExPolygon {
+	if minWidth <= 0 || len(regions) == 0 {
+		return regions
+	}
+	out := make([]ExPolygon, 0, len(regions))
+	for _, e := range regions {
+		netArea := e.Outer.Area()
+		perim := ringPerimeter(e.Outer)
+		for _, h := range e.Holes {
+			netArea -= h.Area()
+			perim += ringPerimeter(h)
+		}
+		if perim <= 0 {
+			continue
+		}
+		if 2*netArea/perim < minWidth {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// ringPerimeter returns the closed length of a ring (last vertex back to
+// the first edge implied).
+func ringPerimeter(r Polygon) float64 {
+	n := len(r)
+	if n < 2 {
+		return 0
+	}
+	var l float64
+	for i := range n {
+		l += r[i].DistanceTo(r[(i+1)%n])
+	}
+	return l
+}
+
 // OffsetExPolygon shrinks a single region inward by d. It is a thin wrapper
 // over [offsetRegions] for callers that start from one region; the result
 // is still a slice because the offset can split or drop the region.

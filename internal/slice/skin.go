@@ -23,7 +23,16 @@ package slice
 // difference is empty for interior layers, so only the first bottomLayers
 // and last topLayers come out solid — matching the old index-based rule,
 // but now derived from geometry rather than assumed.
-func ClassifySkin(areas [][]ExPolygon, topLayers, bottomLayers int) (solid, sparse [][]ExPolygon) {
+//
+// minSkinWidth (mm) discards diff-derived exposed surfaces thinner than that
+// mean width. Adjacent layers whose contours differ only by quantization /
+// simplify noise would otherwise spawn thin spurious solid slivers on a
+// surface that is really vertical, leaving speckled solid where the bulk
+// should be sparse. OrcaSlicer does the equivalent (it opens its top/bottom
+// diff by ext_perimeter_width/10 in detect_surfaces_type). A non-positive
+// width disables the pass. The genuine top/bottom boundary layers, exposed
+// over their whole area rather than via a diff, are never filtered.
+func ClassifySkin(areas [][]ExPolygon, topLayers, bottomLayers int, minSkinWidth float64) (solid, sparse [][]ExPolygon) {
 	n := len(areas)
 	solid = make([][]ExPolygon, n)
 	sparse = make([][]ExPolygon, n)
@@ -40,12 +49,12 @@ func ClassifySkin(areas [][]ExPolygon, topLayers, bottomLayers int) (solid, spar
 		if i == n-1 {
 			exposedTop[i] = areas[i]
 		} else {
-			exposedTop[i] = difference(areas[i], areas[i+1])
+			exposedTop[i] = dropThinRegions(difference(areas[i], areas[i+1]), minSkinWidth)
 		}
 		if i == 0 {
 			exposedBottom[i] = areas[i]
 		} else {
-			exposedBottom[i] = difference(areas[i], areas[i-1])
+			exposedBottom[i] = dropThinRegions(difference(areas[i], areas[i-1]), minSkinWidth)
 		}
 	}
 

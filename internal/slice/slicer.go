@@ -37,7 +37,12 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 
 	// Pass 2: classify each fill region into solid skin / sparse interior
 	// by comparing it against the layers above and below.
-	solid, sparse := ClassifySkin(fillAreas, process.TopLayers, process.BottomLayers)
+	// Discard exposure slivers thinner than a fifth of a line width so
+	// adjacent-layer contour noise cannot seed thin spurious solid rings on
+	// what are really vertical surfaces. (OrcaSlicer opens its top/bottom
+	// diff by ext_perimeter_width/10, which likewise removes features under
+	// ~one fifth of a line wide.)
+	solid, sparse := ClassifySkin(fillAreas, process.TopLayers, process.BottomLayers, process.LineWidth/5)
 
 	// Pass 3: lay down the actual fill.
 	for i := range layers {

@@ -42,7 +42,7 @@ func TestClassifySkin_ConstantCrossSection(t *testing.T) {
 		areas[i] = []slice.ExPolygon{square(0, 0, 10)}
 	}
 
-	solid, sparse := slice.ClassifySkin(areas, 2, 2)
+	solid, sparse := slice.ClassifySkin(areas, 2, 2, 0)
 
 	for i := range areas {
 		wantSolid := i == 0 || i == 1 || i == 3 || i == 4
@@ -56,6 +56,28 @@ func TestClassifySkin_ConstantCrossSection(t *testing.T) {
 	}
 }
 
+func TestClassifySkin_FiltersThinSlivers(t *testing.T) {
+	t.Parallel()
+	// A nominally vertical column whose middle layer is inset by a tiny
+	// 0.03 mm — the kind of difference contour quantization produces. The
+	// exposed diff is a sub-bead sliver frame (mean width ≈ 0.03 mm) that
+	// must NOT become solid: a 0.08 mm min-width filter drops it so the
+	// enclosed middle layer stays fully sparse.
+	full := []slice.ExPolygon{square(0, 0, 10)}
+	inset := []slice.ExPolygon{square(0.03, 0.03, 10-0.06)} // 9.94 mm, ~99.88 % of area
+	areas := [][]slice.ExPolygon{full, inset, full, inset, full}
+
+	// With no filter the sliver leaks through as solid skin.
+	rawSolid, _ := slice.ClassifySkin(areas, 1, 1, 0)
+	require.Greater(t, totalArea(rawSolid[2]), 0.0, "no filter: sliver leaks as solid")
+
+	// With the min-width filter the enclosed layer is clean.
+	solid, sparse := slice.ClassifySkin(areas, 1, 1, 0.08)
+	require.Empty(t, solid[2], "filtered: enclosed layer has no spurious solid")
+	require.InDelta(t, totalArea(areas[2]), totalArea(sparse[2]), 1e-6,
+		"filtered: enclosed layer is fully sparse")
+}
+
 func TestClassifySkin_NarrowingPartGetsRoof(t *testing.T) {
 	t.Parallel()
 	// A 10x10 base for two layers, then a 4x4 column on top. Where the
@@ -66,7 +88,7 @@ func TestClassifySkin_NarrowingPartGetsRoof(t *testing.T) {
 	column := []slice.ExPolygon{square(3, 3, 4)} // area 16, centred on the base
 	areas := [][]slice.ExPolygon{base, base, column}
 
-	solid, sparse := slice.ClassifySkin(areas, 1, 1)
+	solid, sparse := slice.ClassifySkin(areas, 1, 1, 0)
 
 	// Layer 1 shoulder: 100 - 16 = 84 of solid roof, 16 of sparse interior.
 	require.InDelta(t, 84.0, totalArea(solid[1]), 1e-3, "shoulder roof area")
