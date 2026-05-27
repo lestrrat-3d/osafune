@@ -29,14 +29,92 @@ type Writer struct {
 	// Mutable head state. Z and E are tracked to emit relative-ish
 	// moves; X/Y is tracked so we know when a travel is needed.
 	x, y, z float64
-	e       float64
+	e       float64 // logical filament deposited (mm); the retraction offset is not folded in
 	speed   float64 // last commanded F (mm/s) — converted to mm/min in gcode
 	primed  bool    // true once at least one move has happened
+
+	// retracted is true while the filament is pulled back (between a
+	// retract before a travel and the prime at its destination). E is held
+	// at e-RetractLength during that window.
+	retracted bool
+	// fan is the last commanded part-cooling fan PWM (0-255), or -1 before
+	// any M106/M107 has been emitted, so the first layer always commands it.
+	fan int
 }
 
 // New constructs a [Writer] for the given output stream and profiles.
 func New(w io.Writer, printer *config.Printer, filament *config.Filament, process *config.Process) *Writer {
-	return &Writer{w: w, printer: printer, filament: filament, process: process}
+	return &Writer{w: w, printer: printer, filament: filament, process: process, fan: -1}
+}
+
+const (
+	// retractMinTravel is the shortest travel (mm) worth retracting for:
+	// shorter hops don't ooze enough to justify the wear of a retract/prime
+	// cycle. Mirrors OrcaSlicer's "minimum travel after retraction".
+	retractMinTravel = 1.5
+	// firstFanLayer is the layer index from which the part-cooling fan runs
+	// at the filament's configured speed; earlier layers print fan-off for
+	// bed adhesion (OrcaSlicer likewise holds the fan off on the first layer).
+	firstFanLayer = 1
+)
+
+// retract pulls the filament back by the filament profile's RetractLength
+// before a travel, so the nozzle stops oozing across the gap. E is an
+// absolute axis (M82), so a retract is a single move to e-RetractLength; the
+// logical deposited length g.e is left untouched and restored by unretract.
+// No-op when retraction is disabled (length<=0) or already retracted.
+func (g *Writer) retract() error {
+	l := g.filament.RetractLength
+	if l <= 0 || g.retracted {
+		return nil
+	}
+	speed := g.filament.RetractSpeed
+	if speed <= 0 {
+		speed = 30
+	}
+	g.retracted = true
+	g.speed = speed // the next XY move differs, so it will re-emit F
+	_, err := fmt.Fprintf(g.w, "G1 E%.5f F%.0f ; retract\n", g.e-l, speed*60)
+	return err
+}
+
+// unretract restores the filament to the logical deposited length g.e at the
+// travel's destination, priming the nozzle before the next extrusion. No-op
+// when not currently retracted.
+func (g *Writer) unretract() error {
+	if !g.retracted {
+		return nil
+	}
+	speed := g.filament.RetractSpeed
+	if speed <= 0 {
+		speed = 30
+	}
+	g.retracted = false
+	g.speed = speed
+	_, err := fmt.Fprintf(g.w, "G1 E%.5f F%.0f ; unretract\n", g.e, speed*60)
+	return err
+}
+
+// setFan commands the part-cooling fan to the given PWM (0-255) when it
+// differs from the last commanded value, emitting M107 for off and M106
+// otherwise. Tracked so a steady fan speed isn't re-emitted every layer.
+func (g *Writer) setFan(pwm int) error {
+	if pwm < 0 {
+		pwm = 0
+	}
+	if pwm > 255 {
+		pwm = 255
+	}
+	if pwm == g.fan {
+		return nil
+	}
+	g.fan = pwm
+	if pwm == 0 {
+		_, err := io.WriteString(g.w, "M107 ; fan off\n")
+		return err
+	}
+	_, err := fmt.Fprintf(g.w, "M106 S%d ; fan\n", pwm)
+	return err
 }
 
 // WriteHeader emits the comment header and start gcode. Call once before
@@ -70,6 +148,9 @@ func (g *Writer) WriteHeader(layers []slice.Layer) error {
 	fmt.Fprintf(&header, "; filament_diameter: %.3f\n", g.printer.FilamentDiameter)
 	fmt.Fprintf(&header, "; nozzle_temperature: %d\n", g.filament.NozzleTemp)
 	fmt.Fprintf(&header, "; bed_temperature: %d\n", g.filament.BedTemp)
+	fmt.Fprintf(&header, "; retract_length: %.3f\n", g.filament.RetractLength)
+	fmt.Fprintf(&header, "; retract_speed: %.0f\n", g.filament.RetractSpeed)
+	fmt.Fprintf(&header, "; fan_speed: %d\n", g.filament.FanSpeed)
 	fmt.Fprintf(&header, "; total_layer_count: %d\n", totalLayers)
 	fmt.Fprintf(&header, "; max_z_height: %.3f\n", maxZ)
 	fmt.Fprintln(&header, ";")
@@ -120,6 +201,15 @@ func (g *Writer) WriteLayer(layer *slice.Layer) error {
 			return err
 		}
 	}
+	// Part-cooling fan: off until firstFanLayer (bed adhesion), then the
+	// filament's configured speed for the rest of the print.
+	fanTarget := 0
+	if layer.Index >= firstFanLayer {
+		fanTarget = g.filament.FanSpeed
+	}
+	if err := g.setFan(fanTarget); err != nil {
+		return err
+	}
 	// Move to new Z before laying down any extrusion on this layer.
 	if err := g.moveZ(layer.Z, g.process.TravelSpeed); err != nil {
 		return err
@@ -147,8 +237,24 @@ func (g *Writer) writePath(p *slice.Path, layerHeight float64) error {
 	}
 	start := p.Points[0]
 	if !g.primed || math.Hypot(start.X-g.x, start.Y-g.y) > slice.Epsilon {
+		dist := math.Hypot(start.X-g.x, start.Y-g.y)
+		// Retract across non-trivial travels once we've started laying
+		// filament, so the nozzle doesn't string over the gap; prime again at
+		// the destination before extruding. Short hops and the very first
+		// move (head still at the purge line) skip it.
+		retractHere := g.primed && dist > retractMinTravel
+		if retractHere {
+			if err := g.retract(); err != nil {
+				return err
+			}
+		}
 		if err := g.travel(start, g.process.TravelSpeed); err != nil {
 			return err
+		}
+		if retractHere {
+			if err := g.unretract(); err != nil {
+				return err
+			}
 		}
 	}
 	for i := 1; i < len(p.Points); i++ {
