@@ -200,7 +200,7 @@ func DefaultProcess() Process {
 		TopLayers:              4,
 		BottomLayers:           3,
 		InfillDensity:          0.15,
-		InfillPattern:          InfillRectilinear,
+		InfillPattern:          InfillGrid,
 		TravelSpeed:            200,
 		PerimeterSpeed:         60,
 		ExternalPerimeterSpeed: 40,
