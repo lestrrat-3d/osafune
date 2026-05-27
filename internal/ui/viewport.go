@@ -37,7 +37,12 @@ const (
 	dragNone dragMode = iota
 	dragOrbit
 	dragPan
+	dragGizmo
 )
+
+// clickThresholdPx is the cursor travel below which a left press+release is
+// treated as a click (select) rather than a drag (orbit).
+const clickThresholdPx = 4
 
 // Viewport is the 3D viewport widget. It owns the camera and rasterizer and
 // renders the current scene on every Draw. Mouse input is translated into
@@ -73,6 +78,17 @@ type Viewport struct {
 	drag       dragMode
 	dragPrev   image.Point
 	dragButton ebiten.MouseButton
+	pressPt    image.Point // where the active left press began (click vs drag)
+
+	// Object editing. selected indexes scene.Objects (-1 = none). gizmo
+	// draws/hit-tests the transform handles; gizmoElem is the handle being
+	// dragged and gizmoCenter the object centre captured at drag start (held
+	// fixed so the rotation/scale pivot doesn't drift mid-drag).
+	gizmo       *render.Gizmo
+	selected    int
+	gizmoElem   render.GizmoElement
+	gizmoCenter mesh.Vec3
+	gizmoRadius float64
 }
 
 // NewViewport returns a Viewport with default camera/rasterizer. Set a mesh
@@ -84,11 +100,35 @@ func NewViewport() *Viewport {
 		raster:    render.New(),
 		toolpaths: render.NewToolpathDrawer(),
 		env:       render.NewEnvironment(),
+		gizmo:     render.NewGizmo(),
+		selected:  -1,
 		bedX:      dp.BedSizeX,
 		bedY:      dp.BedSizeY,
 		layerLo:   -1,
 		layerHi:   -1,
 	}
+}
+
+// selectedObject returns the currently selected, visible object, or nil. It
+// guards the index against scene changes that may have invalidated it.
+func (v *Viewport) selectedObject() *mesh.Object {
+	if v.scene == nil || v.selected < 0 || v.selected >= len(v.scene.Objects) {
+		return nil
+	}
+	if v.scene.Objects[v.selected].Hidden {
+		return nil
+	}
+	return &v.scene.Objects[v.selected]
+}
+
+// gizmoCenterRadius is the world centre and ring radius of the selection's
+// gizmo, or ok=false when nothing manipulable is selected.
+func (v *Viewport) gizmoCenterRadius() (mesh.Vec3, float64, bool) {
+	obj := v.selectedObject()
+	if obj == nil || obj.Mesh.Bounds.Empty() {
+		return mesh.Vec3{}, 0, false
+	}
+	return obj.Mesh.Bounds.Center(), render.GizmoRadius(obj.Mesh.Bounds), true
 }
 
 // SetBedSize updates the build-plate dimensions (mm) the environment draws.
@@ -154,7 +194,22 @@ func (v *Viewport) Mode() ViewMode { return v.mode }
 func (v *Viewport) SetScene(s *mesh.Scene) {
 	v.scene = s
 	v.dirty = true
+	v.selected = -1 // new geometry — drop any stale selection
 	guigui.RequestRedraw(v)
+}
+
+// DropSelectedToBed reseats the selected object (or the whole scene when
+// nothing is selected) so its lowest point rests on Z=0.
+func (v *Viewport) DropSelectedToBed() {
+	if obj := v.selectedObject(); obj != nil {
+		obj.Mesh.DropToBed()
+		guigui.RequestRedraw(v)
+		return
+	}
+	if v.scene != nil && !v.scene.Bounds().Empty() {
+		v.scene.Translate(mesh.Vec3{0, 0, -v.scene.Bounds().Min[2]})
+		guigui.RequestRedraw(v)
+	}
 }
 
 // ResetView reframes the camera around the current scene.
@@ -190,6 +245,10 @@ func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBoun
 	switch v.mode {
 	case ViewMesh:
 		v.raster.Draw(dst, b, v.scene, &v.cam)
+		// Transform gizmo for the selected object sits on top of the mesh.
+		if c, r, ok := v.gizmoCenterRadius(); ok {
+			v.gizmo.Draw(dst, b, &v.cam, c, r, v.gizmoElem)
+		}
 	case ViewToolpaths:
 		layers := v.layers
 		// The body always renders as a solid wall shell. topCut/botCut mark
@@ -267,13 +326,19 @@ func (v *Viewport) HandlePointingInput(context *guigui.Context, widgetBounds *gu
 	case v.drag == dragNone && inside:
 		switch {
 		case inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft):
-			if ebiten.IsKeyPressed(ebiten.KeyShift) || ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight) {
+			v.dragButton = ebiten.MouseButtonLeft
+			v.pressPt = image.Pt(cx, cy)
+			v.dragPrev = v.pressPt
+			switch {
+			case v.gizmoHitAt(bounds, cx, cy) != render.GizmoNone:
+				// Gizmo grabs first: a press on a handle manipulates the
+				// selected object instead of orbiting.
+				v.startGizmoDrag(v.gizmoHitAt(bounds, cx, cy))
+			case ebiten.IsKeyPressed(ebiten.KeyShift) || ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight):
 				v.drag = dragPan
-			} else {
+			default:
 				v.drag = dragOrbit
 			}
-			v.dragButton = ebiten.MouseButtonLeft
-			v.dragPrev = image.Pt(cx, cy)
 		case inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonMiddle):
 			v.drag = dragPan
 			v.dragButton = ebiten.MouseButtonMiddle
@@ -291,6 +356,20 @@ func (v *Viewport) HandlePointingInput(context *guigui.Context, widgetBounds *gu
 		// presses left + middle and releases one — only the active drag
 		// should stop.
 		if !ebiten.IsMouseButtonPressed(v.dragButton) {
+			switch {
+			case v.drag == dragGizmo:
+				// A rotated/scaled part may now sink into or float above the
+				// plate; reseat it so it rests on the bed.
+				if obj := v.selectedObject(); obj != nil {
+					obj.Mesh.DropToBed()
+				}
+				v.gizmoElem = render.GizmoNone
+			case v.dragButton == ebiten.MouseButtonLeft &&
+				absInt(cx-v.pressPt.X) <= clickThresholdPx && absInt(cy-v.pressPt.Y) <= clickThresholdPx:
+				// A left press that barely moved is a click → (de)select the
+				// object under the cursor.
+				v.handleClickSelect(bounds, cx, cy)
+			}
 			v.drag = dragNone
 			// Drag just ended: request one more redraw so the viewport
 			// re-renders at full detail (the draft drawn during the drag
@@ -312,6 +391,8 @@ func (v *Viewport) HandlePointingInput(context *guigui.Context, widgetBounds *gu
 					v.cam.Orbit(-dx*math.Pi/vh, dy*math.Pi/vh)
 				case dragPan:
 					v.cam.PanScreen(dx, dy, bounds.Dy())
+				case dragGizmo:
+					v.applyGizmoDrag(bounds, cx, cy)
 				}
 				v.dragPrev = image.Pt(cx, cy)
 				changed = true
@@ -324,4 +405,98 @@ func (v *Viewport) HandlePointingInput(context *guigui.Context, widgetBounds *gu
 		return guigui.HandleInputByWidget(v)
 	}
 	return guigui.HandleInputResult{}
+}
+
+// gizmoHitAt returns the gizmo handle under window-pixel (cx,cy), or
+// GizmoNone. Only the mesh view (where editing happens) has a gizmo.
+func (v *Viewport) gizmoHitAt(bounds image.Rectangle, cx, cy int) render.GizmoElement {
+	if v.mode != ViewMesh {
+		return render.GizmoNone
+	}
+	c, r, ok := v.gizmoCenterRadius()
+	if !ok {
+		return render.GizmoNone
+	}
+	return v.gizmo.Hit(bounds, &v.cam, c, r, float32(cx), float32(cy))
+}
+
+// startGizmoDrag captures the pivot (object centre) and ring radius so the
+// rotation/scale stays anchored for the duration of the drag.
+func (v *Viewport) startGizmoDrag(elem render.GizmoElement) {
+	c, r, ok := v.gizmoCenterRadius()
+	if !ok {
+		return
+	}
+	v.drag = dragGizmo
+	v.gizmoElem = elem
+	v.gizmoCenter = c
+	v.gizmoRadius = r
+}
+
+// handleClickSelect picks the object under the cursor (window pixels) and
+// makes it the selection, or clears the selection when clicking empty space.
+func (v *Viewport) handleClickSelect(bounds image.Rectangle, cx, cy int) {
+	if v.mode != ViewMesh {
+		return
+	}
+	// PickRay works in viewport-local pixels, so offset by the widget origin.
+	lx := float32(cx - bounds.Min.X)
+	ly := float32(cy - bounds.Min.Y)
+	v.selected = render.PickObject(v.scene, &v.cam, lx, ly, float32(bounds.Dx()), float32(bounds.Dy()))
+}
+
+// applyGizmoDrag maps the cursor motion since the last frame to a rotation
+// (angle swept about the gizmo centre) or a uniform scale (radial-distance
+// ratio), applied about the captured pivot.
+func (v *Viewport) applyGizmoDrag(bounds image.Rectangle, cx, cy int) {
+	obj := v.selectedObject()
+	if obj == nil {
+		return
+	}
+	gcx, gcy, ok := v.gizmo.ScreenCenter(bounds, &v.cam, v.gizmoCenter)
+	if !ok {
+		return
+	}
+	prevX, prevY := float32(v.dragPrev.X), float32(v.dragPrev.Y)
+	nowX, nowY := float32(cx), float32(cy)
+
+	if v.gizmoElem == render.GizmoScale {
+		prevD := math.Hypot(float64(prevX-gcx), float64(prevY-gcy))
+		nowD := math.Hypot(float64(nowX-gcx), float64(nowY-gcy))
+		if prevD > 1e-3 {
+			obj.Mesh.ScaleUniform(v.gizmoCenter, nowD/prevD)
+		}
+		return
+	}
+
+	prevA := math.Atan2(float64(prevY-gcy), float64(prevX-gcx))
+	nowA := math.Atan2(float64(nowY-gcy), float64(nowX-gcx))
+	delta := nowA - prevA
+	for delta > math.Pi {
+		delta -= 2 * math.Pi
+	}
+	for delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+	// Screen Y points down, so atan2 sweeps clockwise-positive; negate so
+	// dragging a ring counter-clockwise turns the part counter-clockwise.
+	obj.Mesh.Rotate(v.gizmoCenter, gizmoAxis(v.gizmoElem), -delta)
+}
+
+func gizmoAxis(e render.GizmoElement) mesh.Axis {
+	switch e {
+	case render.GizmoRotateX:
+		return mesh.AxisX
+	case render.GizmoRotateY:
+		return mesh.AxisY
+	default:
+		return mesh.AxisZ
+	}
+}
+
+func absInt(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
 }

@@ -39,6 +39,7 @@ type Root struct {
 	background       basicwidget.Background
 	openButton       basicwidget.Button
 	resetButton      basicwidget.Button
+	dropButton       basicwidget.Button
 	sliceButton      basicwidget.Button
 	meshButton       basicwidget.Button
 	saveButton       basicwidget.Button
@@ -111,6 +112,7 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.background)
 	adder.AddWidget(&r.openButton)
 	adder.AddWidget(&r.resetButton)
+	adder.AddWidget(&r.dropButton)
 	adder.AddWidget(&r.sliceButton)
 	adder.AddWidget(&r.meshButton)
 	adder.AddWidget(&r.saveButton)
@@ -173,6 +175,12 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 		r.viewport.ResetView()
 	})
 
+	r.dropButton.SetText("Drop to Bed")
+	r.dropButton.OnUp(func(context *guigui.Context) {
+		r.viewport.DropSelectedToBed()
+	})
+	context.SetEnabled(&r.dropButton, r.viewport.Mode() == ViewMesh && r.viewport.scene != nil)
+
 	r.sliceButton.SetText("Slice")
 	r.sliceButton.OnUp(func(context *guigui.Context) {
 		r.runSlice()
@@ -215,6 +223,7 @@ func (r *Root) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBounds
 	r.toolbarItems = append(r.toolbarItems,
 		guigui.LinearLayoutItem{Widget: &r.openButton, Size: guigui.FixedSize(5 * u)},
 		guigui.LinearLayoutItem{Widget: &r.resetButton, Size: guigui.FixedSize(6 * u)},
+		guigui.LinearLayoutItem{Widget: &r.dropButton, Size: guigui.FixedSize(6 * u)},
 		guigui.LinearLayoutItem{Widget: &r.sliceButton, Size: guigui.FixedSize(5 * u)},
 		guigui.LinearLayoutItem{Widget: &r.meshButton, Size: guigui.FixedSize(6 * u)},
 		guigui.LinearLayoutItem{Widget: &r.saveButton, Size: guigui.FixedSize(7 * u)},
