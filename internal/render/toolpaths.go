@@ -131,13 +131,18 @@ type toolpathCacheKey struct {
 	wallsOnly bool // decimated draft drawn while the camera is moving
 }
 
-// segmentBillboard caches one segment's 8 finished screen-space
-// vertices plus the painter-sort depth key (mean view Z of the eight
-// corners). Generated in the per-frame projection pass and consumed,
-// in sorted order, by the emit pass.
+// segmentBillboard caches one segment's 8 finished screen-space vertices
+// plus the painter-sort depth key. The key is the segment's NEAREST
+// endpoint depth (largest view Z, i.e. closest to the eye), not the mean of
+// the corners: a wall segment is a ribbon tilted in depth, so its mean sits
+// behind a flat interior-infill segment at the same pixel and the infill
+// wrongly paints over the enclosing wall. Sorting by the nearest point
+// makes the outer wall win while still letting a genuinely concave feature
+// (e.g. a recess) show its interior. Generated in the projection pass and
+// consumed, in sorted order, by the emit pass.
 type segmentBillboard struct {
-	verts [segmentVertexCount]ebiten.Vertex
-	avgZ  float32
+	verts    [segmentVertexCount]ebiten.Vertex
+	depthKey float32
 }
 
 // segmentVertexCount is the per-segment vertex count of OrcaSlicer's
@@ -294,6 +299,15 @@ func (d *ToolpathDrawer) rebuild(dstBounds image.Rectangle, layers []slice.Layer
 		// makes adjacent layers' geometry meet at the exact layer
 		// boundary so they appear continuous in Z.
 		centerZ := float32(layer.Z) - halfH
+		// Billboard vertical half-extent: two full layer heights rather than
+		// the geometric half (a 4× layer-height ribbon), so each bead heavily
+		// overlaps its neighbours. On a curved or sloped surface seen at a
+		// near-edge-on (grazing) angle the thin per-layer ribbons project far
+		// apart and leave see-through horizontal gaps between layers; this
+		// overlap bridges them down to ~2° elevation (one full layer height /
+		// 2× overlap was enough at ~6° but not at ~2°). centerZ (above) is
+		// unchanged, so beads stay centred on their true layer midpoint.
+		billboardHalfH := layerH * 2
 
 		for _, p := range layer.Paths {
 			if !p.Role.IsExtrusion() || len(p.Points) < 2 {
@@ -337,17 +351,17 @@ func (d *ToolpathDrawer) rebuild(dstBounds image.Rectangle, layers []slice.Layer
 				posA := mesh.Vec3{float32(a.X), float32(a.Y), centerZ}
 				posB := mesh.Vec3{float32(b.X), float32(b.Y), centerZ}
 				if rec, ok := d.buildSegment(&vp, x0, y0, fw, fh,
-					posA, posB, halfW, halfH, baseR, baseG, baseB); ok {
+					posA, posB, halfW, billboardHalfH, baseR, baseG, baseB); ok {
 					d.segs = append(d.segs, rec)
 				}
 			}
 		}
 	}
 
-	// Painter sort: furthest segment first (most-negative view Z),
-	// nearer segments overdraw them.
+	// Painter sort by each segment's nearest-endpoint depth: furthest
+	// (most-negative view Z) first, nearer segments overdraw them.
 	sort.Slice(d.segs, func(i, j int) bool {
-		return d.segs[i].avgZ < d.segs[j].avgZ
+		return d.segs[i].depthKey < d.segs[j].depthKey
 	})
 
 	d.buildBatches()
@@ -487,7 +501,6 @@ func (d *ToolpathDrawer) buildSegment(
 	verticalDir := mesh.Vec3{lineUp[0] * halfH, lineUp[1] * halfH, lineUp[2] * halfH}
 
 	var out segmentBillboard
-	var sumViewZ float32
 	// Screen-space bounds of the eight vertices, for off-screen culling.
 	minSX, minSY := float32(math.MaxFloat32), float32(math.MaxFloat32)
 	maxSX, maxSY := -float32(math.MaxFloat32), -float32(math.MaxFloat32)
@@ -580,7 +593,6 @@ func (d *ToolpathDrawer) buildSegment(
 			ColorB: baseB * shade,
 			ColorA: 1,
 		}
-		sumViewZ += pr.ViewZ
 	}
 	// Off-screen cull: if the segment's whole screen footprint lies beyond
 	// any edge of the viewport, it contributes nothing — skip it so the
@@ -590,7 +602,15 @@ func (d *ToolpathDrawer) buildSegment(
 	if maxSX < x0 || minSX > x0+fw || maxSY < y0 || minSY > y0+fh {
 		return segmentBillboard{}, false
 	}
-	out.avgZ = sumViewZ / segmentVertexCount
+	// Painter-sort key: the nearest endpoint depth (largest view Z). See
+	// segmentBillboard. Both endpoints are in front of the near plane here
+	// (any vertex behind it already returned false above).
+	za := vp.Project(posA).ViewZ
+	zb := vp.Project(posB).ViewZ
+	out.depthKey = za
+	if zb > za {
+		out.depthKey = zb
+	}
 	return out, true
 }
 

@@ -36,7 +36,7 @@ func Defaults() Camera {
 		Pitch:    math.Pi / 6,
 		Distance: 4,
 		FOV:      math.Pi / 4,
-		Near:     0.1,
+		Near:     0.002,
 		Far:      10000,
 	}
 }
@@ -58,9 +58,15 @@ func (c *Camera) Fit(bbox mesh.AABB) {
 		half = math.Pi / 8
 	}
 	c.Distance = r / float32(math.Tan(half)) * 1.4
-	// Keep Near/Far loose enough that the whole model is in range even
-	// after the user zooms in or pans away.
-	c.Near = c.Distance * 0.01
+	// Keep Near very close and Far loose so the model stays in range even
+	// after the user zooms in or pans. The near plane is deliberately tiny:
+	// the toolpath previewer orders geometry by a painter's sort, not a
+	// depth buffer, so it gains no precision from a larger near plane — but
+	// a larger one clips the front band of the model when zoomed in, and
+	// because a segment is dropped wholesale if any vertex falls behind the
+	// near plane (no near-plane clipping yet), that shows up as a
+	// see-through horizontal gap across the model.
+	c.Near = c.Distance * 0.0005
 	c.Far = c.Distance * 100
 }
 
