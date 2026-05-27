@@ -50,11 +50,17 @@ type Root struct {
 	patternSelect     basicwidget.Select[config.InfillPattern]
 	densityLabel      basicwidget.Text
 	densityInput      basicwidget.NumberInput
+	supportLabel      basicwidget.Text
+	supportToggle     basicwidget.Toggle
 	objectPane        ObjectPane
 	viewport          *Viewport
 	layerSlider       LayerRangeSlider
 	opener            FileOpener
 	saver             FileSaver
+
+	// supportEnabled mirrors the Support toggle; runSlice feeds it into the
+	// plate so the slicer generates tree supports when on.
+	supportEnabled bool
 
 	// infillPattern and infillDensityPct are the user's last selections;
 	// they override the defaults whenever runSlice runs. Density is
@@ -133,6 +139,8 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	adder.AddWidget(&r.patternSelect)
 	adder.AddWidget(&r.densityLabel)
 	adder.AddWidget(&r.densityInput)
+	adder.AddWidget(&r.supportLabel)
+	adder.AddWidget(&r.supportToggle)
 	adder.AddWidget(&r.objectPane)
 	adder.AddWidget(r.viewport)
 	adder.AddWidget(&r.layerSlider)
@@ -164,6 +172,13 @@ func (r *Root) Build(context *guigui.Context, adder *guigui.ChildAdder) error {
 	r.densityInput.OnValueChanged(func(context *guigui.Context, value int, committed bool) {
 		r.infillDensityPct = value
 	})
+
+	r.supportLabel.SetValue("Support")
+	r.supportToggle.SetValue(r.supportEnabled)
+	r.supportToggle.OnValueChanged(func(context *guigui.Context, value bool) {
+		r.supportEnabled = value
+	})
+
 	r.layerSlider.OnChanged(func(lo, hi int) {
 		r.viewport.SetLayerRange(lo, hi)
 	})
@@ -251,6 +266,8 @@ func (r *Root) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBounds
 		guigui.LinearLayoutItem{Widget: &r.patternSelect, Size: guigui.FixedSize(7 * u)},
 		guigui.LinearLayoutItem{Widget: &r.densityLabel, Size: guigui.FixedSize(3 * u)},
 		guigui.LinearLayoutItem{Widget: &r.densityInput, Size: guigui.FixedSize(4 * u)},
+		guigui.LinearLayoutItem{Widget: &r.supportLabel, Size: guigui.FixedSize(4 * u)},
+		guigui.LinearLayoutItem{Widget: &r.supportToggle, Size: guigui.FixedSize(3 * u)},
 		guigui.LinearLayoutItem{Size: guigui.FlexibleSize(1)},
 	)
 	toolbar := guigui.LinearLayout{
@@ -512,6 +529,7 @@ func (r *Root) currentPlate() *project.Plate {
 	}
 	plate.Process.InfillPattern = r.infillPattern
 	plate.Process.InfillDensity = float64(r.infillDensityPct) / 100.0
+	plate.Process.SupportEnable = r.supportEnabled
 	return &plate
 }
 

@@ -213,6 +213,19 @@ type Process struct {
 	// profiles reduce it slightly so the strand stretches without sagging.
 	BridgeFlow float64
 
+	// SupportEnable turns on tree (organic) support generation under
+	// overhangs. Off by default — supports add print time and need removal.
+	SupportEnable bool
+	// SupportThreshold is the overhang angle from vertical (degrees) beyond
+	// which a downward surface needs support; e.g. 50 supports surfaces that
+	// lean out more than 50° from straight up.
+	SupportThreshold float64
+	// SupportBranchDiameter is the nominal diameter (mm) of a support branch
+	// tip; merged trunks grow thicker toward the bed.
+	SupportBranchDiameter float64
+	// SupportSpeed is the print speed (mm/s) for support extrusions.
+	SupportSpeed float64
+
 	// Speeds, all mm/s.
 	TravelSpeed            float64
 	PerimeterSpeed         float64
@@ -248,6 +261,10 @@ func DefaultProcess() Process {
 		BrimWidth:              0,
 		BridgeSpeed:            25,
 		BridgeFlow:             1.0,
+		SupportEnable:          false,
+		SupportThreshold:       50,
+		SupportBranchDiameter:  2.0,
+		SupportSpeed:           40,
 		TravelSpeed:            200,
 		PerimeterSpeed:         60,
 		ExternalPerimeterSpeed: 40,

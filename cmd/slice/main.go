@@ -26,6 +26,7 @@ func main() {
 	nozzle := flag.Float64("nozzle", 0.4, "nozzle diameter in mm")
 	nozzleTemp := flag.Int("nozzle-temp", 210, "nozzle temperature °C")
 	bedTemp := flag.Int("bed-temp", 60, "bed temperature °C")
+	support := flag.Bool("support", false, "generate tree supports under overhangs")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: slice [flags] <input.stl|input.3mf>")
@@ -48,6 +49,7 @@ func main() {
 	plate.Printer.NozzleDiameter = *nozzle
 	plate.Filament.NozzleTemp = *nozzleTemp
 	plate.Filament.BedTemp = *bedTemp
+	plate.Process.SupportEnable = *support
 
 	m := proj.PlateMesh(0)
 	layers := slice.Slice(&m, &plate.Printer, &plate.Process)

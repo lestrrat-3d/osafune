@@ -21,6 +21,9 @@ const (
 	// beneath), printed slowly with extra cooling and span-aligned strands so
 	// it sets taut instead of drooping.
 	RoleBridge
+	// RoleSupport tags the sacrificial tree-support pillars printed under
+	// overhangs and snapped off after the print.
+	RoleSupport
 )
 
 // String returns the OrcaSlicer-compatible role marker used in gcode
@@ -42,6 +45,8 @@ func (r PathRole) String() string {
 		return "Skirt/Brim"
 	case RoleBridge:
 		return "Bridge infill"
+	case RoleSupport:
+		return "Support material"
 	}
 	return "Unknown"
 }

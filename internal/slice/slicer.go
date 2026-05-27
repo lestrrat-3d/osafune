@@ -44,6 +44,14 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 	// ~one fifth of a line wide.)
 	solid, sparse := ClassifySkin(fillAreas, process.TopLayers, process.BottomLayers, process.LineWidth/5)
 
+	// Tree supports look at every layer's footprint at once (top-down branch
+	// growth), so they are generated before the per-layer finalisation and
+	// the resulting pillars are merged into each layer's paths below.
+	var supports [][]Path
+	if process.SupportEnable {
+		supports = GenerateSupports(layers, process)
+	}
+
 	// Pass 3: lay down the actual fill, place the perimeter seams, then
 	// reorder each layer's paths to minimise non-extruding travel
 	// (boustrophedon infill, nearest-first loops) without disturbing the
@@ -56,6 +64,9 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 		bridge, supportedSolid := SplitBridges(solid[i], i, layers)
 		GenerateInfill(&layers[i], supportedSolid, sparse[i], process)
 		GenerateBridges(&layers[i], bridge, process)
+		if supports != nil {
+			layers[i].Paths = append(layers[i].Paths, supports[i]...)
+		}
 		PlaceSeams(&layers[i], process.SeamPosition)
 		// Skirt/brim are first-layer-only adhesion loops; prepend before the
 		// travel pass so they head the layer and get chained with it.

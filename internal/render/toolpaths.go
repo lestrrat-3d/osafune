@@ -32,6 +32,8 @@ func RoleColor(r slice.PathRole) color.NRGBA {
 		return color.NRGBA{0x8a, 0xb0, 0x6f, 0xff} // skirt/brim — sage green
 	case slice.RoleBridge:
 		return color.NRGBA{0x3f, 0x6f, 0xb0, 0xff} // bridge — deep blue
+	case slice.RoleSupport:
+		return color.NRGBA{0x9a, 0x77, 0xb0, 0xff} // support — muted purple
 	}
 	return color.NRGBA{0x80, 0x86, 0x8e, 0xff}
 }
@@ -48,6 +50,7 @@ func LegendEntries() []LegendEntry {
 		{Role: slice.RoleSolidInfill, Color: RoleColor(slice.RoleSolidInfill), Label: "Solid infill"},
 		{Role: slice.RoleSkirtBrim, Color: RoleColor(slice.RoleSkirtBrim), Label: "Skirt/Brim"},
 		{Role: slice.RoleBridge, Color: RoleColor(slice.RoleBridge), Label: "Bridge"},
+		{Role: slice.RoleSupport, Color: RoleColor(slice.RoleSupport), Label: "Support"},
 	}
 }
 
