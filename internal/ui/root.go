@@ -404,6 +404,13 @@ func (r *Root) drainSliceResult() {
 			paths += len(l.Paths)
 		}
 		slog.Info("sliced", "layers", len(res.layers), "paths", paths)
+		// The enabled-state of the layer slider, Save and Show Mesh buttons
+		// is decided earlier in this same Build pass — before this drain ran
+		// — so they were still evaluated against the pre-slice state (no
+		// layers, mesh mode). Request another Build so they re-enable on the
+		// next frame; without it they stay dead until some unrelated event
+		// (an orbit/pan) triggers the next rebuild.
+		guigui.RequestRebuild(r)
 	default:
 	}
 }
