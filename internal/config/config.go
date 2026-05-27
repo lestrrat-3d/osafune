@@ -144,6 +144,7 @@ type Filament struct {
 	RetractSpeed   float64 // mm/s
 	ZHop           float64 // mm, nozzle lift during a retracted travel; 0 disables
 	FanSpeed       int     // 0-255, part cooling fan speed after first few layers
+	BridgeFanSpeed int     // 0-255, part cooling fan while printing bridges (usually max)
 	FilamentDensity float64 // g/cm^3, used for weight estimates in header
 }
 
@@ -159,6 +160,7 @@ func DefaultFilament() Filament {
 		RetractSpeed:    35,
 		ZHop:            0.4,
 		FanSpeed:        255,
+		BridgeFanSpeed:  255,
 		FilamentDensity: 1.24,
 	}
 }
@@ -204,6 +206,13 @@ type Process struct {
 	// number of line-width loops.
 	BrimWidth float64
 
+	// BridgeSpeed is the print speed (mm/s) for unsupported bridge surfaces,
+	// kept low so the spanning strands have time to cool taut.
+	BridgeSpeed float64
+	// BridgeFlow scales the extrusion of bridge strands (1.0 = nominal). Some
+	// profiles reduce it slightly so the strand stretches without sagging.
+	BridgeFlow float64
+
 	// Speeds, all mm/s.
 	TravelSpeed            float64
 	PerimeterSpeed         float64
@@ -237,6 +246,8 @@ func DefaultProcess() Process {
 		SkirtLoops:             1,
 		SkirtDistance:          2.0,
 		BrimWidth:              0,
+		BridgeSpeed:            25,
+		BridgeFlow:             1.0,
 		TravelSpeed:            200,
 		PerimeterSpeed:         60,
 		ExternalPerimeterSpeed: 40,

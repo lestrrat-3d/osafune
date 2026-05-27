@@ -17,6 +17,10 @@ const (
 	// fused to the object's outer wall). OrcaSlicer groups them under one
 	// "Skirt/Brim" type, so we do too.
 	RoleSkirtBrim
+	// RoleBridge tags solid fill that spans empty space (no layer directly
+	// beneath), printed slowly with extra cooling and span-aligned strands so
+	// it sets taut instead of drooping.
+	RoleBridge
 )
 
 // String returns the OrcaSlicer-compatible role marker used in gcode
@@ -36,6 +40,8 @@ func (r PathRole) String() string {
 		return "Solid infill"
 	case RoleSkirtBrim:
 		return "Skirt/Brim"
+	case RoleBridge:
+		return "Bridge infill"
 	}
 	return "Unknown"
 }

@@ -175,6 +175,8 @@ func (g *Writer) WriteHeader(layers []slice.Layer) error {
 	fmt.Fprintf(&header, "; z_hop: %.3f\n", g.filament.ZHop)
 	fmt.Fprintf(&header, "; seam_position: %s\n", g.process.SeamPosition)
 	fmt.Fprintf(&header, "; fan_speed: %d\n", g.filament.FanSpeed)
+	fmt.Fprintf(&header, "; bridge_fan_speed: %d\n", g.filament.BridgeFanSpeed)
+	fmt.Fprintf(&header, "; bridge_speed: %.0f\n", g.process.BridgeSpeed)
 	fmt.Fprintf(&header, "; total_layer_count: %d\n", totalLayers)
 	fmt.Fprintf(&header, "; max_z_height: %.3f\n", maxZ)
 	fmt.Fprintln(&header, ";")
@@ -244,6 +246,16 @@ func (g *Writer) WriteLayer(layer *slice.Layer) error {
 		if p.Role != currentRole {
 			fmt.Fprintf(g.w, ";TYPE:%s\n", p.Role)
 			currentRole = p.Role
+			// Boost the fan over bridges so the spanning strands set fast;
+			// restore the layer fan when leaving them. setFan dedupes, so this
+			// only emits at the bridge group's boundaries.
+			roleFan := fanTarget
+			if p.Role == slice.RoleBridge && g.filament.BridgeFanSpeed > roleFan {
+				roleFan = g.filament.BridgeFanSpeed
+			}
+			if err := g.setFan(roleFan); err != nil {
+				return err
+			}
 		}
 		if err := g.writePath(&p, layer.Height); err != nil {
 			return err

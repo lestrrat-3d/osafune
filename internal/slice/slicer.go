@@ -50,7 +50,12 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 	// wall→infill phase order. Seams are placed before the travel pass so it
 	// orders loops by their final seam point and preserves it.
 	for i := range layers {
-		GenerateInfill(&layers[i], solid[i], sparse[i], process)
+		// Split the solid skin into bridges (overhanging air, no layer below)
+		// and ordinary supported solid; bridges get span-aligned strands at
+		// bridge speed/flow with the fan boosted by the gcode writer.
+		bridge, supportedSolid := SplitBridges(solid[i], i, layers)
+		GenerateInfill(&layers[i], supportedSolid, sparse[i], process)
+		GenerateBridges(&layers[i], bridge, process)
 		PlaceSeams(&layers[i], process.SeamPosition)
 		// Skirt/brim are first-layer-only adhesion loops; prepend before the
 		// travel pass so they head the layer and get chained with it.
