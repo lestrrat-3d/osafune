@@ -62,10 +62,6 @@ func SliceMesh(m *mesh.Mesh, firstLayerHeight, layerHeight float64) []Layer {
 	// Precompute (zMin, zMax) per triangle so we can early-reject; this
 	// turns the per-layer pass from O(triangles) into O(triangles in
 	// vertical range) on tall meshes.
-	type triRange struct {
-		idx        int
-		zMin, zMax float64
-	}
 	ranges := make([]triRange, len(m.Triangles))
 	for i, t := range m.Triangles {
 		z0 := float64(t.Vertices[0][2])
@@ -87,30 +83,84 @@ func SliceMesh(m *mesh.Mesh, firstLayerHeight, layerHeight float64) []Layer {
 		if li == 0 {
 			h = firstLayerHeight
 		}
-		slicePlane := z - h*0.5
-
-		var segs []segment2
-		for _, r := range ranges {
-			if r.zMin > slicePlane {
-				break // sorted by zMin, no more candidates
-			}
-			if r.zMax < slicePlane {
-				continue
-			}
-			if s, ok := intersectTriangle(&m.Triangles[r.idx], slicePlane); ok {
-				segs = append(segs, s)
-			}
-		}
-
-		polys := chainSegments(segs)
 		layers[li] = Layer{
 			Index:    li,
 			Z:        z,
 			Height:   h,
-			Contours: assembleExPolygons(polys),
+			Contours: contoursAtPlane(m, ranges, z-h*0.5),
 		}
 	}
+	fixNotchLayers(m, ranges, zs, layers, firstLayerHeight, layerHeight)
 	return layers
+}
+
+// triRange is the precomputed vertical extent of one triangle, used to
+// skip triangles that cannot cross a given slice plane.
+type triRange struct {
+	idx        int
+	zMin, zMax float64
+}
+
+// contoursAtPlane intersects the mesh with a single horizontal plane and
+// returns the assembled cross-section. ranges must be sorted by zMin.
+func contoursAtPlane(m *mesh.Mesh, ranges []triRange, slicePlane float64) []ExPolygon {
+	var segs []segment2
+	for _, r := range ranges {
+		if r.zMin > slicePlane {
+			break // sorted by zMin, no more candidates
+		}
+		if r.zMax < slicePlane {
+			continue
+		}
+		if s, ok := intersectTriangle(&m.Triangles[r.idx], slicePlane); ok {
+			segs = append(segs, s)
+		}
+	}
+	return assembleExPolygons(chainSegments(segs))
+}
+
+// contoursArea sums the outer area of every contour in a layer.
+func contoursArea(cs []ExPolygon) float64 {
+	var a float64
+	for _, c := range cs {
+		a += c.Outer.Area()
+	}
+	return a
+}
+
+// nudgeOffsets are the slice-plane shifts (mm) tried by [fixNotchLayers],
+// small enough to stay well inside the layer band but enough to clear a
+// mesh vertex sitting on the plane.
+var nudgeOffsets = []float64{0.02, -0.02, 0.05, -0.05, 0.08, -0.08}
+
+// fixNotchLayers repairs the occasional layer whose cross-section area
+// notches sharply below BOTH neighbours. A real feature does not lose then
+// regain area within a single 0.2 mm layer, so such a notch is a slicing
+// artifact: the plane grazed a mesh vertex, the chaining took a shortcut,
+// and area was cut. Re-slicing a few µm above/below dodges the degenerate
+// plane; the attempt with the most area (closest to the true section, since
+// the artifact only ever removes area) replaces the notch.
+func fixNotchLayers(m *mesh.Mesh, ranges []triRange, zs []float64, layers []Layer, firstLayerHeight, layerHeight float64) {
+	for i := 1; i < len(layers)-1; i++ {
+		a := contoursArea(layers[i].Contours)
+		ref := math.Min(contoursArea(layers[i-1].Contours), contoursArea(layers[i+1].Contours))
+		if ref <= 0 || a >= 0.8*ref {
+			continue // not an isolated notch
+		}
+		h := layerHeight
+		if i == 0 {
+			h = firstLayerHeight
+		}
+		plane := zs[i] - h*0.5
+		best, bestA := layers[i].Contours, a
+		for _, nudge := range nudgeOffsets {
+			alt := contoursAtPlane(m, ranges, plane+nudge)
+			if aa := contoursArea(alt); aa > bestA {
+				best, bestA = alt, aa
+			}
+		}
+		layers[i].Contours = best
+	}
 }
 
 // intersectTriangle returns the line segment where triangle t crosses the

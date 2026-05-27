@@ -50,15 +50,40 @@ func chainSegments(segs []segment2) []Polygon {
 		return segs[s].A
 	}
 
-	// Find an unused segment incident to k that is not segment except.
-	findPartner := func(k chainKey, except int) (int, int, bool) {
+	// Find the continuation of the contour at junction k, arriving along
+	// dirIn (the unit-ish direction into k). Where the slice plane passes
+	// through a mesh vertex, more than two segment-ends share k and a naive
+	// "first unused" pick can thread the chain across the interior, closing
+	// a self-crossing loop that encloses ~zero area (a see-through gap in
+	// the preview). Instead, among the unused candidates pick the sharpest
+	// right turn relative to dirIn: consistently turning the same way walks
+	// the boundary of the planar segment graph without crossing it — the
+	// standard face-traversal rule. With only two ends at k (the common
+	// case) this is just the one continuation.
+	findPartner := func(k chainKey, except int, head, dirIn Point2) (int, int, bool) {
+		best, bestEnd := -1, 0
+		bestTurn := math.Inf(-1)
 		for _, r := range idx[k] {
 			if r.seg == except || used[r.seg] {
 				continue
 			}
-			return r.seg, r.end, true
+			dirOut := otherEnd(r.seg, r.end).Sub(head)
+			// Signed turn angle from dirIn to dirOut in (-π, π]. Taking the
+			// most positive (sharpest left / counter-clockwise) turn keeps
+			// the walk on its own loop: at a vertex where two regions touch,
+			// the rightmost turn would cross into the other region and close
+			// a zero-area figure-eight, while the leftmost turn separates
+			// them into two simple loops.
+			turn := math.Atan2(dirIn.Cross(dirOut), dirIn.Dot(dirOut))
+			if turn > bestTurn {
+				bestTurn = turn
+				best, bestEnd = r.seg, r.end
+			}
 		}
-		return 0, 0, false
+		if best < 0 {
+			return 0, 0, false
+		}
+		return best, bestEnd, true
 	}
 
 	var out []Polygon
@@ -78,7 +103,10 @@ func chainSegments(segs []segment2) []Polygon {
 		for {
 			head := otherEnd(cur, 1-headEnd) // the actual head point
 			k := keyOf(head)
-			next, nend, ok := findPartner(k, cur)
+			// Direction we arrived along, used to pick the continuation
+			// that stays on the boundary at multi-segment junctions.
+			dirIn := head.Sub(poly[len(poly)-2])
+			next, nend, ok := findPartner(k, cur, head, dirIn)
 			if !ok {
 				break
 			}
