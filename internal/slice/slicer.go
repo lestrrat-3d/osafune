@@ -52,6 +52,11 @@ func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Lay
 	for i := range layers {
 		GenerateInfill(&layers[i], solid[i], sparse[i], process)
 		PlaceSeams(&layers[i], process.SeamPosition)
+		// Skirt/brim are first-layer-only adhesion loops; prepend before the
+		// travel pass so they head the layer and get chained with it.
+		if i == 0 {
+			GenerateSkirtBrim(&layers[i], process, process.FirstLayerLineWidth, process.FirstLayerSpeed)
+		}
 		OptimizeTravel(&layers[i])
 	}
 	return layers

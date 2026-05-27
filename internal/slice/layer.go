@@ -12,6 +12,11 @@ const (
 	RolePerimeter
 	RoleInfill
 	RoleSolidInfill
+	// RoleSkirtBrim tags the first-layer adhesion loops — both the skirt
+	// (free-standing priming loops around the print) and the brim (loops
+	// fused to the object's outer wall). OrcaSlicer groups them under one
+	// "Skirt/Brim" type, so we do too.
+	RoleSkirtBrim
 )
 
 // String returns the OrcaSlicer-compatible role marker used in gcode
@@ -29,6 +34,8 @@ func (r PathRole) String() string {
 		return "Internal infill"
 	case RoleSolidInfill:
 		return "Solid infill"
+	case RoleSkirtBrim:
+		return "Skirt/Brim"
 	}
 	return "Unknown"
 }

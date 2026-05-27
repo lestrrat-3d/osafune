@@ -193,6 +193,17 @@ type Process struct {
 	// [SeamPosition]. Empty is treated as [SeamAligned].
 	SeamPosition SeamPosition
 
+	// SkirtLoops is the number of free-standing loops traced around the
+	// whole print on the first layer to prime the nozzle; 0 disables.
+	SkirtLoops int
+	// SkirtDistance is the gap (mm) between the object (or brim, if any) and
+	// the innermost skirt loop.
+	SkirtDistance float64
+	// BrimWidth is how far (mm) the brim extends outward from the object's
+	// first-layer wall for bed adhesion; 0 disables. Rounded to a whole
+	// number of line-width loops.
+	BrimWidth float64
+
 	// Speeds, all mm/s.
 	TravelSpeed            float64
 	PerimeterSpeed         float64
@@ -223,6 +234,9 @@ func DefaultProcess() Process {
 		InfillDensity:          0.15,
 		InfillPattern:          InfillGrid,
 		SeamPosition:           SeamAligned,
+		SkirtLoops:             1,
+		SkirtDistance:          2.0,
+		BrimWidth:              0,
 		TravelSpeed:            200,
 		PerimeterSpeed:         60,
 		ExternalPerimeterSpeed: 40,
