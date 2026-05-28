@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 func TestOffsetExPolygon_ShrinksSquare(t *testing.T) {

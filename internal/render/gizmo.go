@@ -8,7 +8,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // GizmoElement identifies a grabbable part of the transform gizmo.

@@ -6,7 +6,7 @@ import (
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // ObjectPane is the left-hand side panel that lists the objects in the

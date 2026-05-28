@@ -8,8 +8,8 @@ import (
 	"github.com/lestrrat-go/polyclip"
 	"github.com/lestrrat-go/polyclip/geom"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 // wtri is one camera-independent world-space triangle of the solid wall

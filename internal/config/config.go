@@ -103,7 +103,7 @@ func DefaultPrinter() Printer {
 		MaxSpeedY:        500,
 		MaxSpeedZ:        20,
 		MaxSpeedE:        25,
-		StartGcode: `; --- makislicer start gcode ---
+		StartGcode: `; --- osafune start gcode ---
 M140 S[bed_temperature]      ; set bed
 M104 S[nozzle_temperature]   ; set hotend
 G28                          ; home all axes
@@ -116,7 +116,7 @@ G1 X100 Y5 Z0.3 F1500 E15    ; purge line
 G92 E0
 ; --- end start gcode ---
 `,
-		EndGcode: `; --- makislicer end gcode ---
+		EndGcode: `; --- osafune end gcode ---
 M104 S0                      ; turn off hotend
 M140 S0                      ; turn off bed
 G91                          ; relative

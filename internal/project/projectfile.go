@@ -5,13 +5,13 @@ import (
 
 	tmf "github.com/lestrrat-go/3mf"
 
-	"github.com/lestrrat-go/makislicer/internal/config"
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/config"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // projectMetaPath is the in-package part that carries our settings alongside
 // the standard 3MF geometry. A plain 3MF reader ignores it; we read it back.
-const projectMetaPath = "/Metadata/makislicer.json"
+const projectMetaPath = "/Metadata/osafune.json"
 
 // projectVersion tags the embedded metadata so a future format change can be
 // detected on load.

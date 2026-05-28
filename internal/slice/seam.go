@@ -1,6 +1,6 @@
 package slice
 
-import "github.com/lestrrat-go/makislicer/internal/config"
+import "github.com/lestrrat-go/osafune/internal/config"
 
 // PlaceSeams rotates each closed perimeter loop so its start point — the
 // visible seam, where the nozzle starts the loop and later stops on it —

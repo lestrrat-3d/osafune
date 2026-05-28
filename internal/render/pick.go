@@ -3,7 +3,7 @@ package render
 import (
 	"math"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // PickRay returns the world-space picking ray for viewport pixel (sx, sy) in

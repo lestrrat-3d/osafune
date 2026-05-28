@@ -3,7 +3,7 @@ package slice
 import (
 	"math"
 
-	"github.com/lestrrat-go/makislicer/internal/config"
+	"github.com/lestrrat-go/osafune/internal/config"
 )
 
 // SplitBridges separates a layer's solid skin into the part supported by the

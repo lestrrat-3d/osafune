@@ -8,7 +8,7 @@ package render
 import (
 	"math"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // Camera is an orbit camera around Target at spherical (Yaw, Pitch, Distance).

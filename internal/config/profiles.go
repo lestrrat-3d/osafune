@@ -18,14 +18,14 @@ const (
 )
 
 // ProfileDir returns the per-user directory where on-disk profiles live
-// (e.g. ~/.config/makislicer on Linux), creating nothing. It mirrors
+// (e.g. ~/.config/osafune on Linux), creating nothing. It mirrors
 // OrcaSlicer's notion of a user config store, scaled down to plain JSON.
 func ProfileDir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "makislicer"), nil
+	return filepath.Join(base, "osafune"), nil
 }
 
 // SaveProfile writes v as <ProfileDir>/<kind>/<name>.json, creating the

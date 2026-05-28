@@ -14,10 +14,10 @@ import (
 
 	"github.com/guigui-gui/guigui"
 
-	"github.com/lestrrat-go/makislicer/internal/config"
-	"github.com/lestrrat-go/makislicer/internal/mesh"
-	"github.com/lestrrat-go/makislicer/internal/render"
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/config"
+	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/render"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 // ViewMode selects whether the viewport shows the source mesh or the

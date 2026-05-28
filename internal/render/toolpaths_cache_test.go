@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 // squareBounds is the AABB of the 10×10 test geometry, used to frame the

@@ -1,4 +1,4 @@
-// Command viewer is the makislicer GUI mesh viewer. It loads STL or 3MF
+// Command viewer is the osafune GUI mesh viewer. It loads STL or 3MF
 // from a path supplied on the command line or via the Open dialog and
 // displays it in an orbit-camera viewport.
 package main
@@ -19,7 +19,7 @@ import (
 	// package self-registers via init().
 	_ "github.com/guigui-gui/guigui/basicwidget/cjkfont"
 
-	"github.com/lestrrat-go/makislicer/internal/ui"
+	"github.com/lestrrat-go/osafune/internal/ui"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func main() {
 	root := ui.NewRoot(ui.NativeOpener{}, ui.NativeSaver{}, initial)
 
 	opts := &guigui.RunOptions{
-		Title:         "makislicer viewer",
+		Title:         "osafune viewer",
 		WindowSize:    image.Pt(1280, 800),
 		WindowMinSize: image.Pt(640, 480),
 		RunGameOptions: &ebiten.RunGameOptions{

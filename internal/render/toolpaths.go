@@ -9,8 +9,8 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 // RoleColor maps a path role to a stable preview colour. The palette

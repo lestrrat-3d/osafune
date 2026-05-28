@@ -1,6 +1,6 @@
 package render
 
-import "github.com/lestrrat-go/makislicer/internal/mesh"
+import "github.com/lestrrat-go/osafune/internal/mesh"
 
 // shadeFactor returns the lighting multiplier for a surface with world normal
 // n under a key light and a dimmer fill light from another direction, with an

@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
-	"github.com/lestrrat-go/makislicer/internal/render"
+	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/render"
 )
 
 func TestRayAABBHitAndMiss(t *testing.T) {

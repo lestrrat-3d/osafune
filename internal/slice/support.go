@@ -3,7 +3,7 @@ package slice
 import (
 	"math"
 
-	"github.com/lestrrat-go/makislicer/internal/config"
+	"github.com/lestrrat-go/osafune/internal/config"
 )
 
 // Tree-support tuning constants. These trade support strength against print

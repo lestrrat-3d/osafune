@@ -1,6 +1,6 @@
 package slice
 
-import "github.com/lestrrat-go/makislicer/internal/config"
+import "github.com/lestrrat-go/osafune/internal/config"
 
 // GeneratePerimeters lays down `Process.Perimeters` walls inside each
 // contour of layer L. Wall 0 (the outermost) is tagged

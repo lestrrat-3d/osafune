@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // LayerHeights produces the sequence of Z heights at which the mesh

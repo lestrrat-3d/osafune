@@ -8,9 +8,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/makislicer/internal/config"
-	"github.com/lestrrat-go/makislicer/internal/gcode"
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/config"
+	"github.com/lestrrat-go/osafune/internal/gcode"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 // wall returns an open extrusion path between two points.
@@ -32,7 +32,7 @@ func emit(t *testing.T, printer config.Printer, fil config.Filament, proc config
 // that the start/end gcode templates happen to contain (the default end
 // gcode includes its own " ; retract" comment, for instance).
 func printBody(out string) string {
-	if i := strings.Index(out, "; --- makislicer end gcode ---"); i >= 0 {
+	if i := strings.Index(out, "; --- osafune end gcode ---"); i >= 0 {
 		return out[:i]
 	}
 	return out

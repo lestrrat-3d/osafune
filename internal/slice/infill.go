@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/lestrrat-go/makislicer/internal/config"
+	"github.com/lestrrat-go/osafune/internal/config"
 )
 
 // GenerateInfill fills the regions inside the innermost perimeter wall.

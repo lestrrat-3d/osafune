@@ -1,8 +1,8 @@
 package slice
 
 import (
-	"github.com/lestrrat-go/makislicer/internal/config"
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/config"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // Slice runs the full pipeline: Z-sweep → perimeter walls → skin detection

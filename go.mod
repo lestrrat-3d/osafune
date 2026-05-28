@@ -1,4 +1,4 @@
-module github.com/lestrrat-go/makislicer
+module github.com/lestrrat-go/osafune
 
 go 1.26.1
 

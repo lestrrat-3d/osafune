@@ -12,10 +12,10 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/lestrrat-go/makislicer/internal/gcode"
-	"github.com/lestrrat-go/makislicer/internal/mesh"
-	"github.com/lestrrat-go/makislicer/internal/project"
-	"github.com/lestrrat-go/makislicer/internal/slice"
+	"github.com/lestrrat-go/osafune/internal/gcode"
+	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/project"
+	"github.com/lestrrat-go/osafune/internal/slice"
 )
 
 func main() {

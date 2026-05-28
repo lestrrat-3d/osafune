@@ -7,8 +7,8 @@
 package project
 
 import (
-	"github.com/lestrrat-go/makislicer/internal/config"
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/config"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // Transform is a placement of a [ModelObject] on a [Plate]: a translation

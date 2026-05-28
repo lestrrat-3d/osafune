@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/lestrrat-go/makislicer/internal/mesh"
+	"github.com/lestrrat-go/osafune/internal/mesh"
 )
 
 // ssaoKernel is a fixed two-ring set of unit-disk offsets the SSAO pass
