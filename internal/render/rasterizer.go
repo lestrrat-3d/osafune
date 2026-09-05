@@ -8,7 +8,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 
-	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-3d/osafune/internal/mesh"
 )
 
 // whiteImage is the 1×1 texture every triangle samples from. DrawTriangles

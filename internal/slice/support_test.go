@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/slice"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
 func rectEx(x0, y0, x1, y1 float64) slice.ExPolygon {

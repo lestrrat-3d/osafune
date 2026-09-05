@@ -7,8 +7,8 @@
 package project
 
 import (
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/mesh"
 )
 
 // Transform is a placement of a [ModelObject] on a [Plate]: a translation

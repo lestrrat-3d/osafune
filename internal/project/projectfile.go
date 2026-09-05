@@ -5,8 +5,8 @@ import (
 
 	tmf "github.com/lestrrat-go/3mf"
 
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/mesh"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/mesh"
 )
 
 // projectMetaPath is the in-package part that carries our settings alongside

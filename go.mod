@@ -1,4 +1,4 @@
-module github.com/lestrrat-go/osafune
+module github.com/lestrrat-3d/osafune
 
 go 1.26.1
 

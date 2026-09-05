@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/config"
 )
 
 func TestProfileRoundTrip(t *testing.T) {
