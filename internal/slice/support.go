@@ -34,7 +34,7 @@ type supNode struct {
 // interface layers, and a simplified nearest-neighbour merge rather than a
 // full collision-avoiding optimiser. It produces removable pillars that hold
 // up overhangs, which is the core of the feature.
-func GenerateSupports(layers []Layer, process *config.Process) [][]Path {
+func GenerateSupports(layers []Layer, process *config.ResolvedProcess) [][]Path {
 	out := make([][]Path, len(layers))
 	if len(layers) < 2 {
 		return out

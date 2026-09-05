@@ -22,7 +22,7 @@ import (
 // [OptimizeTravel] later chains them nearest-first within their single
 // Skirt/Brim role run, which stays first. lineWidth/speed are the first
 // layer's. Only meaningful on layer 0; a layer with no contours is a no-op.
-func GenerateSkirtBrim(layer *Layer, process *config.Process, lineWidth, speed float64) {
+func GenerateSkirtBrim(layer *Layer, process *config.ResolvedProcess, lineWidth, speed float64) {
 	if len(layer.Contours) == 0 || lineWidth <= 0 {
 		return
 	}

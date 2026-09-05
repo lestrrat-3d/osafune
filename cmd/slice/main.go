@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/lestrrat-3d/units"
+
 	"github.com/lestrrat-3d/osafune/internal/gcode"
 	"github.com/lestrrat-3d/osafune/internal/mesh"
 	"github.com/lestrrat-3d/osafune/internal/project"
@@ -42,17 +44,26 @@ func main() {
 
 	proj := project.NewFromScene(scene)
 	plate := &proj.Plates[0]
-	plate.Process.LayerHeight = *layerHeight
-	plate.Process.FirstLayerHeight = *layerHeight
+	// The flags are bare numbers, so each is given the unit its help text
+	// promises right here, at the one boundary where the user's number
+	// enters the program.
+	plate.Process.LayerHeight = units.Millimeters(*layerHeight)
+	plate.Process.FirstLayerHeight = units.Millimeters(*layerHeight)
 	plate.Process.Perimeters = *perimeters
 	plate.Process.InfillDensity = *infill
-	plate.Printer.NozzleDiameter = *nozzle
-	plate.Filament.NozzleTemp = *nozzleTemp
-	plate.Filament.BedTemp = *bedTemp
+	plate.Printer.NozzleDiameter = units.Millimeters(*nozzle)
+	plate.Filament.NozzleTemp = units.DegreesCelsius(float64(*nozzleTemp))
+	plate.Filament.BedTemp = units.DegreesCelsius(float64(*bedTemp))
 	plate.Process.SupportEnable = *support
 
+	resolved, err := plate.Resolve()
+	if err != nil {
+		slog.Error("plate profiles", "err", err)
+		os.Exit(1)
+	}
+
 	m := proj.PlateMesh(0)
-	layers := slice.Slice(&m, &plate.Printer, &plate.Process)
+	layers := slice.Slice(&m, &resolved.Printer, &resolved.Process)
 	if len(layers) == 0 {
 		slog.Error("slicer produced no layers (mesh outside printable Z range?)")
 		os.Exit(1)
@@ -67,7 +78,7 @@ func main() {
 	bw := bufio.NewWriter(f)
 	defer bw.Flush()
 
-	if err := gcode.Write(bw, layers, &plate.Printer, &plate.Filament, &plate.Process); err != nil {
+	if err := gcode.Write(bw, layers, &resolved.Printer, &resolved.Filament, &resolved.Process); err != nil {
 		slog.Error("emit gcode", "err", err)
 		os.Exit(1)
 	}

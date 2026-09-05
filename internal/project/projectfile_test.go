@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/lestrrat-3d/units"
+
 	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/mesh"
 	"github.com/lestrrat-3d/osafune/internal/project"
@@ -34,9 +36,9 @@ func TestProjectFileRoundTrip(t *testing.T) {
 		Process:  config.DefaultProcess(),
 	}
 	plate.Process.Name = "Custom"
-	plate.Process.LayerHeight = 0.32
+	plate.Process.LayerHeight = units.Millimeters(0.32)
 	plate.Process.InfillDensity = 0.37
-	plate.Filament.NozzleTemp = 233
+	plate.Filament.NozzleTemp = units.DegreesCelsius(233)
 
 	path := filepath.Join(t.TempDir(), "proj.3mf")
 	require.NoError(t, project.SaveProjectFile(path, scene, plate))
@@ -50,9 +52,9 @@ func TestProjectFileRoundTrip(t *testing.T) {
 
 	// Settings round-trip from the embedded attachment.
 	require.Equal(t, "Custom", gotPlate.Process.Name)
-	require.Equal(t, 0.32, gotPlate.Process.LayerHeight)
+	require.Equal(t, units.Millimeters(0.32), gotPlate.Process.LayerHeight)
 	require.Equal(t, 0.37, gotPlate.Process.InfillDensity)
-	require.Equal(t, 233, gotPlate.Filament.NozzleTemp)
+	require.Equal(t, units.DegreesCelsius(233), gotPlate.Filament.NozzleTemp)
 
 	// Per-object visibility round-trips by position.
 	require.False(t, gotScene.Objects[0].Hidden)

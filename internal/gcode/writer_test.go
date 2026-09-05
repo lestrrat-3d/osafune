@@ -20,7 +20,7 @@ func wall(role slice.PathRole, pts ...slice.Point2) slice.Path {
 
 // emit runs the whole writer over layers with the given profiles and returns
 // the gcode text.
-func emit(t *testing.T, printer config.Printer, fil config.Filament, proc config.Process, layers []slice.Layer) string {
+func emit(t *testing.T, printer config.ResolvedPrinter, fil config.ResolvedFilament, proc config.ResolvedProcess, layers []slice.Layer) string {
 	t.Helper()
 	var buf bytes.Buffer
 	require.NoError(t, gcode.Write(&buf, layers, &printer, &fil, &proc))
@@ -48,7 +48,7 @@ func TestRetractionOnLongTravel(t *testing.T) {
 			wall(slice.RoleExternalPerimeter, slice.Point2{X: 50, Y: 50}, slice.Point2{X: 60, Y: 50}),
 		},
 	}}
-	out := emit(t, config.DefaultPrinter(), config.DefaultFilament(), config.DefaultProcess(), layers)
+	out := emit(t, defaultPrinter(t), defaultFilament(t), defaultProcess(t), layers)
 
 	body := printBody(out)
 	require.Contains(t, body, " ; retract", "long travel must retract")
@@ -57,7 +57,7 @@ func TestRetractionOnLongTravel(t *testing.T) {
 	// unretract restores it: the two E values must differ by exactly 0.8.
 	rE := eValueOnLine(t, body, " ; retract")
 	uE := eValueOnLine(t, body, " ; unretract")
-	require.InDelta(t, config.DefaultFilament().RetractLength, uE-rE, 1e-4,
+	require.InDelta(t, defaultFilament(t).RetractLength, uE-rE, 1e-4,
 		"unretract must restore exactly RetractLength")
 }
 
@@ -72,13 +72,13 @@ func TestNoRetractionOnShortTravel(t *testing.T) {
 			wall(slice.RolePerimeter, slice.Point2{X: 10.5, Y: 0}, slice.Point2{X: 20, Y: 0}),
 		},
 	}}
-	out := emit(t, config.DefaultPrinter(), config.DefaultFilament(), config.DefaultProcess(), layers)
+	out := emit(t, defaultPrinter(t), defaultFilament(t), defaultProcess(t), layers)
 	require.NotContains(t, printBody(out), " ; retract", "short hop must not retract")
 }
 
 func TestRetractionDisabled(t *testing.T) {
 	t.Parallel()
-	fil := config.DefaultFilament()
+	fil := defaultFilament(t)
 	fil.RetractLength = 0 // disabled
 	layers := []slice.Layer{{
 		Index: 0, Z: 0.2, Height: 0.2,
@@ -87,18 +87,18 @@ func TestRetractionDisabled(t *testing.T) {
 			wall(slice.RoleExternalPerimeter, slice.Point2{X: 50, Y: 50}, slice.Point2{X: 60, Y: 50}),
 		},
 	}}
-	out := emit(t, config.DefaultPrinter(), fil, config.DefaultProcess(), layers)
+	out := emit(t, defaultPrinter(t), fil, defaultProcess(t), layers)
 	require.NotContains(t, printBody(out), " ; retract", "retraction disabled when RetractLength<=0")
 }
 
 func TestFanOffFirstLayerThenOn(t *testing.T) {
 	t.Parallel()
-	fil := config.DefaultFilament() // FanSpeed 255
+	fil := defaultFilament(t) // FanSpeed 255
 	layers := []slice.Layer{
 		{Index: 0, Z: 0.2, Height: 0.2, Paths: []slice.Path{wall(slice.RoleExternalPerimeter, slice.Point2{X: 0, Y: 0}, slice.Point2{X: 10, Y: 0})}},
 		{Index: 1, Z: 0.4, Height: 0.2, Paths: []slice.Path{wall(slice.RoleExternalPerimeter, slice.Point2{X: 0, Y: 0}, slice.Point2{X: 10, Y: 0})}},
 	}
-	out := emit(t, config.DefaultPrinter(), fil, config.DefaultProcess(), layers)
+	out := emit(t, defaultPrinter(t), fil, defaultProcess(t), layers)
 
 	offIdx := strings.Index(out, "M107 ; fan off")
 	onIdx := strings.Index(out, "M106 S255 ; fan")

@@ -33,7 +33,7 @@ func SplitBridges(solidAreas []ExPolygon, layerIndex int, layers []Layer) ([]ExP
 // filament crosses the gap by its shortest dimension), tagged [RoleBridge] at
 // the bridge speed and flow so the gcode writer prints them slowly with the
 // cooling fan boosted. Appends to layer.Paths.
-func GenerateBridges(layer *Layer, bridgeAreas []ExPolygon, process *config.Process) {
+func GenerateBridges(layer *Layer, bridgeAreas []ExPolygon, process *config.ResolvedProcess) {
 	if len(bridgeAreas) == 0 {
 		return
 	}

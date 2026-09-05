@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
@@ -14,7 +13,7 @@ import (
 // after. FanSpeed is set below BridgeFanSpeed so the boost is observable.
 func TestBridgeFanBoost(t *testing.T) {
 	t.Parallel()
-	fil := config.DefaultFilament()
+	fil := defaultFilament(t)
 	fil.FanSpeed = 128
 	fil.BridgeFanSpeed = 255
 
@@ -28,7 +27,7 @@ func TestBridgeFanBoost(t *testing.T) {
 			wall(slice.RolePerimeter, slice.Point2{X: 0, Y: 2}, slice.Point2{X: 10, Y: 2}),
 		}},
 	}
-	out := emit(t, config.DefaultPrinter(), fil, config.DefaultProcess(), layers)
+	out := emit(t, defaultPrinter(t), fil, defaultProcess(t), layers)
 	body := printBody(out)
 
 	boost := strings.Index(body, "M106 S255 ; fan")

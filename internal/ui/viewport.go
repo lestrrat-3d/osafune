@@ -94,7 +94,10 @@ type Viewport struct {
 // NewViewport returns a Viewport with default camera/rasterizer. Set a mesh
 // later via SetMesh.
 func NewViewport() *Viewport {
-	dp := config.DefaultPrinter()
+	// The built-in default profile is built from the units package's own
+	// constructors, so resolving it cannot fail; a zero bed just draws no
+	// plate, which is the same thing the zero Viewport would have shown.
+	dp, _ := config.DefaultPrinter().Resolve()
 	return &Viewport{
 		cam:       render.Defaults(),
 		raster:    render.New(),

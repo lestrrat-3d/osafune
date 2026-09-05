@@ -13,9 +13,14 @@ import (
 // the standard 3MF geometry. A plain 3MF reader ignores it; we read it back.
 const projectMetaPath = "/Metadata/osafune.json"
 
-// projectVersion tags the embedded metadata so a future format change can be
-// detected on load.
-const projectVersion = 1
+// projectVersion tags the embedded metadata so a format change can be detected
+// on load.
+//
+// Version 2 replaced the bare numbers of version 1 with typed quantities: a
+// layer height is written as "0.2 mm" rather than 0.2. [migrateV1] reads the old
+// shape, so a project saved before the change still opens with its own profiles
+// rather than silently reverting to the defaults.
+const projectVersion = 2
 
 type objectMeta struct {
 	Name   string
@@ -85,8 +90,7 @@ func LoadProjectFile(path string) (*mesh.Scene, *Plate, error) {
 
 	if pkg, err := tmf.Open(path); err == nil {
 		if data := pkg.Part(projectMetaPath); len(data) > 0 {
-			var meta projectMeta
-			if json.Unmarshal(data, &meta) == nil {
+			if meta, ok := decodeMeta(data); ok {
 				plate.Printer = meta.Printer
 				plate.Filament = meta.Filament
 				plate.Process = meta.Process
@@ -95,6 +99,29 @@ func LoadProjectFile(path string) (*mesh.Scene, *Plate, error) {
 		}
 	}
 	return scene, plate, nil
+}
+
+// decodeMeta reads the embedded settings, upgrading a version-1 payload on the
+// way. It reports false for a payload it cannot read at all, which leaves the
+// caller's default profiles in place — the same thing a plain, non-project 3MF
+// gets.
+func decodeMeta(data []byte) (projectMeta, bool) {
+	// The version is read on its own first: a version-1 payload writes bare
+	// numbers where this version writes quantities, so decoding it as the
+	// current shape fails on the first field and tells us nothing.
+	var probe struct{ Version int }
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return projectMeta{}, false
+	}
+	if probe.Version <= 1 {
+		return migrateV1(data)
+	}
+
+	var meta projectMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return projectMeta{}, false
+	}
+	return meta, true
 }
 
 func defaultPlate() *Plate {

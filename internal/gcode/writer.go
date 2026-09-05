@@ -22,9 +22,9 @@ import (
 // makes reusing one across plates unsafe.
 type Writer struct {
 	w        io.Writer
-	printer  *config.Printer
-	filament *config.Filament
-	process  *config.Process
+	printer  *config.ResolvedPrinter
+	filament *config.ResolvedFilament
+	process  *config.ResolvedProcess
 
 	// Mutable head state. Z and E are tracked to emit relative-ish
 	// moves; X/Y is tracked so we know when a travel is needed.
@@ -43,7 +43,7 @@ type Writer struct {
 }
 
 // New constructs a [Writer] for the given output stream and profiles.
-func New(w io.Writer, printer *config.Printer, filament *config.Filament, process *config.Process) *Writer {
+func New(w io.Writer, printer *config.ResolvedPrinter, filament *config.ResolvedFilament, process *config.ResolvedProcess) *Writer {
 	return &Writer{w: w, printer: printer, filament: filament, process: process, fan: -1}
 }
 
@@ -417,7 +417,7 @@ func expandTemplate(s string, vars map[string]string) string {
 // Write drives the whole emission for a sliced plate in one call:
 // header, every layer, footer. Convenience wrapper around the lower-level
 // methods for callers that don't need per-layer streaming.
-func Write(w io.Writer, layers []slice.Layer, printer *config.Printer, filament *config.Filament, process *config.Process) error {
+func Write(w io.Writer, layers []slice.Layer, printer *config.ResolvedPrinter, filament *config.ResolvedFilament, process *config.ResolvedProcess) error {
 	gw := New(w, printer, filament, process)
 	if err := gw.WriteHeader(layers); err != nil {
 		return err
