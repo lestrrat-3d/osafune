@@ -19,7 +19,7 @@ import (
 	// package self-registers via init().
 	_ "github.com/guigui-gui/guigui/basicwidget/cjkfont"
 
-	"github.com/lestrrat-go/osafune/internal/ui"
+	"github.com/lestrrat-3d/osafune/internal/ui"
 )
 
 func main() {

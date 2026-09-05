@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/osafune/internal/slice"
+	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
 // travelLength sums the non-extruding travel between consecutive paths: the

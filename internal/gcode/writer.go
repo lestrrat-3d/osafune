@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/slice"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
 // Writer streams gcode for a single plate. One Writer per output file:

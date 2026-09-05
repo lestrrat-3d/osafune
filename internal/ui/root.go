@@ -13,11 +13,11 @@ import (
 	"github.com/guigui-gui/guigui"
 	"github.com/guigui-gui/guigui/basicwidget"
 
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/gcode"
-	"github.com/lestrrat-go/osafune/internal/mesh"
-	"github.com/lestrrat-go/osafune/internal/project"
-	"github.com/lestrrat-go/osafune/internal/slice"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/gcode"
+	"github.com/lestrrat-3d/osafune/internal/mesh"
+	"github.com/lestrrat-3d/osafune/internal/project"
+	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
 // FileSaver picks an output path. Same shape as [FileOpener] so a single

@@ -14,10 +14,10 @@ import (
 
 	"github.com/guigui-gui/guigui"
 
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/mesh"
-	"github.com/lestrrat-go/osafune/internal/render"
-	"github.com/lestrrat-go/osafune/internal/slice"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/mesh"
+	"github.com/lestrrat-3d/osafune/internal/render"
+	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
 // ViewMode selects whether the viewport shows the source mesh or the

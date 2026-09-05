@@ -6,9 +6,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-go/osafune/internal/config"
-	"github.com/lestrrat-go/osafune/internal/mesh"
-	"github.com/lestrrat-go/osafune/internal/project"
+	"github.com/lestrrat-3d/osafune/internal/config"
+	"github.com/lestrrat-3d/osafune/internal/mesh"
+	"github.com/lestrrat-3d/osafune/internal/project"
 )
 
 // quad returns a two-triangle square mesh with bounds, enough to round-trip.
