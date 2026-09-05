@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Allow other workflows to run this whole pipeline as a gate before publishing.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # Tier 1: the cheap checks run first. The heavier tiers below gate on this
+  # via `needs`, so a formatting or vet failure short-circuits the pipeline
+  # before any cross-platform test job starts.
+  #
+  # golangci-lint is not here yet. The house config reports 73 findings against
+  # this tree, and several are musttag on the structs that define the on-disk
+  # project format, where a careless tag would rename a persisted JSON key.
+  # Cleaning that up is its own change; this job is the placeholder gate until
+  # then.
+  vet:
+    name: vet and gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # ebiten links X11/GL and the file dialog links GTK, so even `go vet`
+      # needs the headers: this module does not build with CGO_ENABLED=0.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libgtk-3-dev libx11-dev libxcursor-dev \
+            libxi-dev libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libasound2-dev pkg-config
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+  # Tier 2: tests, only after the cheap checks succeed. Race detector on Linux;
+  # the other OSes run the same suite without it, purely for cross-platform
+  # coverage. The suite is headless — nothing here opens a window — so no
+  # display server is needed on any runner.
+  test:
+    needs: vet
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            race: "-race"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Only Linux needs these. macOS builds against Cocoa and Windows against
+      # the Win32 API, both of which ship with the runner.
+      - name: Install build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libgtk-3-dev libx11-dev libxcursor-dev \
+            libxi-dev libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libasound2-dev pkg-config
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ${{ matrix.race }} -timeout 10m ./...
+
+  # Tier 2: verify the tree is tidy.
+  verify:
+    needs: vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Tidy dependencies
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  # Tier 2: vulnerability scan of the module and its dependencies.
+  govulncheck:
+    needs: vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1-mesa-dev libgtk-3-dev libx11-dev libxcursor-dev \
+            libxi-dev libxinerama-dev libxrandr-dev libxxf86vm-dev \
+            libasound2-dev pkg-config
+
+      # v1.4.0 — the version the sibling modules pin — panics on this tree with
+      # "ForEachElement called on type containing *types.TypeParam", an x/tools
+      # bug reached through the generic config.LoadProfile. v1.7.0 analyzes it
+      # cleanly.
+      #
+      # setup-go pins GOTOOLCHAIN=local, so allow an on-demand fetch: go.mod
+      # names a toolchain newer than the `go` directive precisely so the stdlib
+      # this builds against is one with the known fixes in it.
+      - name: Run govulncheck
+        env:
+          GOTOOLCHAIN: auto
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...

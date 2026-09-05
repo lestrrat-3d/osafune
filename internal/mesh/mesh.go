@@ -85,9 +85,9 @@ type Mesh struct {
 // same way whether or not a part is currently visible) but are skipped by
 // the renderer.
 type Object struct {
-	Name    string
-	Mesh    Mesh
-	Hidden  bool
+	Name   string
+	Mesh   Mesh
+	Hidden bool
 }
 
 // Scene is the unit the loader produces and the viewer renders. Objects keep

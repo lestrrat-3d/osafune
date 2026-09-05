@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - go
+    groups:
+      # The sibling modules move together and are pinned to untagged commits,
+      # so a week's worth of them is one review rather than five.
+      lestrrat:
+        patterns:
+          - "github.com/lestrrat-go/*"
+          - "github.com/lestrrat-3d/*"
+      # ebiten and guigui are the GUI stack; an ebiten bump that guigui has not
+      # caught up with breaks the viewer, so they are reviewed as a pair.
+      gui:
+        patterns:
+          - "github.com/hajimehoshi/*"
+          - "github.com/guigui-gui/*"
+          - "github.com/ebitengine/*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - github-actions

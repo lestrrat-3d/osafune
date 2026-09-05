@@ -103,49 +103,49 @@ func (r *Rasterizer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, scene *m
 			continue
 		}
 		for _, t := range scene.Objects[oi].Mesh.Triangles {
-		// Backface cull in world space: a face is visible when its normal
-		// points toward the eye. Use the midpoint as the surface reference;
-		// for the small triangles in a typical mesh this is exact enough.
-		mid := mesh.Vec3{
-			(t.Vertices[0][0] + t.Vertices[1][0] + t.Vertices[2][0]) / 3,
-			(t.Vertices[0][1] + t.Vertices[1][1] + t.Vertices[2][1]) / 3,
-			(t.Vertices[0][2] + t.Vertices[1][2] + t.Vertices[2][2]) / 3,
-		}
-		toEye := mesh.Vec3{eye[0] - mid[0], eye[1] - mid[1], eye[2] - mid[2]}
-		dotN := t.Normal[0]*toEye[0] + t.Normal[1]*toEye[1] + t.Normal[2]*toEye[2]
-		if dotN <= 0 {
-			continue
-		}
+			// Backface cull in world space: a face is visible when its normal
+			// points toward the eye. Use the midpoint as the surface reference;
+			// for the small triangles in a typical mesh this is exact enough.
+			mid := mesh.Vec3{
+				(t.Vertices[0][0] + t.Vertices[1][0] + t.Vertices[2][0]) / 3,
+				(t.Vertices[0][1] + t.Vertices[1][1] + t.Vertices[2][1]) / 3,
+				(t.Vertices[0][2] + t.Vertices[1][2] + t.Vertices[2][2]) / 3,
+			}
+			toEye := mesh.Vec3{eye[0] - mid[0], eye[1] - mid[1], eye[2] - mid[2]}
+			dotN := t.Normal[0]*toEye[0] + t.Normal[1]*toEye[1] + t.Normal[2]*toEye[2]
+			if dotN <= 0 {
+				continue
+			}
 
-		p0 := cam.Project(t.Vertices[0], aspect)
-		p1 := cam.Project(t.Vertices[1], aspect)
-		p2 := cam.Project(t.Vertices[2], aspect)
-		// Any vertex behind the near plane: skip. A robust impl would clip
-		// the triangle against the near plane; v1 trades that off because
-		// the bounding-box fit keeps everything in front by default.
-		if !p0.InFront || !p1.InFront || !p2.InFront {
-			continue
-		}
+			p0 := cam.Project(t.Vertices[0], aspect)
+			p1 := cam.Project(t.Vertices[1], aspect)
+			p2 := cam.Project(t.Vertices[2], aspect)
+			// Any vertex behind the near plane: skip. A robust impl would clip
+			// the triangle against the near plane; v1 trades that off because
+			// the bounding-box fit keeps everything in front by default.
+			if !p0.InFront || !p1.InFront || !p2.InFront {
+				continue
+			}
 
-		// Lambertian shading: light from world toward LightDir, surface
-		// normal in world space, with an ambient floor so the dark side is
-		// readable.
-		ndotL := -(t.Normal[0]*r.LightDir[0] + t.Normal[1]*r.LightDir[1] + t.Normal[2]*r.LightDir[2])
-		if ndotL < 0 {
-			ndotL = 0
-		}
-		shade := r.AmbientFactor + (1-r.AmbientFactor)*ndotL
-		cr := r.BaseColor[0] * shade
-		cg := r.BaseColor[1] * shade
-		cb := r.BaseColor[2] * shade
+			// Lambertian shading: light from world toward LightDir, surface
+			// normal in world space, with an ambient floor so the dark side is
+			// readable.
+			ndotL := -(t.Normal[0]*r.LightDir[0] + t.Normal[1]*r.LightDir[1] + t.Normal[2]*r.LightDir[2])
+			if ndotL < 0 {
+				ndotL = 0
+			}
+			shade := r.AmbientFactor + (1-r.AmbientFactor)*ndotL
+			cr := r.BaseColor[0] * shade
+			cg := r.BaseColor[1] * shade
+			cb := r.BaseColor[2] * shade
 
-		st := sortedTri{
-			v0:   makeVertex(p0, x0, y0, fw, fh, cr, cg, cb),
-			v1:   makeVertex(p1, x0, y0, fw, fh, cr, cg, cb),
-			v2:   makeVertex(p2, x0, y0, fw, fh, cr, cg, cb),
-			avgZ: (p0.ViewZ + p1.ViewZ + p2.ViewZ) / 3,
-		}
-		r.sorted = append(r.sorted, st)
+			st := sortedTri{
+				v0:   makeVertex(p0, x0, y0, fw, fh, cr, cg, cb),
+				v1:   makeVertex(p1, x0, y0, fw, fh, cr, cg, cb),
+				v2:   makeVertex(p2, x0, y0, fw, fh, cr, cg, cb),
+				avgZ: (p0.ViewZ + p1.ViewZ + p2.ViewZ) / 3,
+			}
+			r.sorted = append(r.sorted, st)
 		}
 	}
 
@@ -212,4 +212,3 @@ func makeVertex(p Projected, x0, y0, fw, fh, cr, cg, cb float32) ebiten.Vertex {
 		ColorA: 1,
 	}
 }
-

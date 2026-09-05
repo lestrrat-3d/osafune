@@ -54,8 +54,8 @@ func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut boo
 		if layerH < minLayerHeight {
 			layerH = minLayerHeight
 		}
-		z1 := float32(l.Z)      // top of layer
-		z0 := z1 - layerH       // bottom of layer
+		z1 := float32(l.Z) // top of layer
+		z0 := z1 - layerH  // bottom of layer
 
 		// Caps fill a layer's whole cross-section solid. That is what makes
 		// the closed exterior read as a solid top/bottom — but in a cutaway
@@ -69,7 +69,7 @@ func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut boo
 				ax, ay := float32(tr[0].X), float32(tr[0].Y)
 				bx, by := float32(tr[1].X), float32(tr[1].Y)
 				cx, cy := float32(tr[2].X), float32(tr[2].Y)
-				out = append(out, wtri{mesh.Vec3{ax, ay, z1}, mesh.Vec3{bx, by, z1}, mesh.Vec3{cx, cy, z1}, up, colUp})       // top cap +Z
+				out = append(out, wtri{mesh.Vec3{ax, ay, z1}, mesh.Vec3{bx, by, z1}, mesh.Vec3{cx, cy, z1}, up, colUp})     // top cap +Z
 				out = append(out, wtri{mesh.Vec3{ax, ay, z0}, mesh.Vec3{cx, cy, z0}, mesh.Vec3{bx, by, z0}, down, colDown}) // bottom cap -Z
 			}
 		}
