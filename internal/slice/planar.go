@@ -222,8 +222,8 @@ func edgeCross(p, q struct {
 		// Edge is parallel to slicing plane — return the midpoint as a
 		// best-effort. In practice this case is rejected by the caller
 		// because both endpoints will land on the same side.
-		return Point2{(p.x + q.x) * 0.5, (p.y + q.y) * 0.5}
+		return Point2{X: (p.x + q.x) * 0.5, Y: (p.y + q.y) * 0.5}
 	}
 	t := (plane - p.z) / dz
-	return Point2{p.x + t*(q.x-p.x), p.y + t*(q.y-p.y)}
+	return Point2{X: p.x + t*(q.x-p.x), Y: p.y + t*(q.y-p.y)}
 }

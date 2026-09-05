@@ -33,8 +33,8 @@ github.com/lestrrat-go/helium v0.8.0 h1:i2zjwLAQI7boU0WKZmAr8fxO7G5P6HnMg9TRtJzj
 github.com/lestrrat-go/helium v0.8.0/go.mod h1:snkloHsH6m0Gsmesput/6ZszTb7JXvCwDG1PMm9ufDM=
 github.com/lestrrat-go/option/v3 v3.0.0-alpha1 h1:dvdzLwm/Ba5CJUF3jQP7w/iNYSLfy7yyh9XXNa1WjxI=
 github.com/lestrrat-go/option/v3 v3.0.0-alpha1/go.mod h1:5KSg20dfsKkNJtjDmaQRLZVXuUrzuCCcz/gbDK0pfKk=
-github.com/lestrrat-go/polyclip v0.0.0-20260527004823-261e57bbb96e h1:biJ/3aBsatlIW0mUGsvQf2VWCMg/NKAP4RuATVoz568=
-github.com/lestrrat-go/polyclip v0.0.0-20260527004823-261e57bbb96e/go.mod h1:gmZG2qligHWlTSC4vRmeyH4JmRBNRyUt3owCXmIFlOY=
+github.com/lestrrat-go/polyclip v0.0.0-20260905223339-a5d5bd36ed25 h1:RtBX3vJjf4BkOR5PlXyMdpF4K2txVTlQOD5ZPHfEviY=
+github.com/lestrrat-go/polyclip v0.0.0-20260905223339-a5d5bd36ed25/go.mod h1:iTQr7+onasvHsqdbNM7aq2xfdMJuwBEV3Oehu5vOMDM=
 github.com/lestrrat-go/stl v0.0.0-20260904080308-f2792ffa3582 h1:gPfueVi1DstVplb0WmlWyWAbKJJl3fF/IJjXvQWBgUE=
 github.com/lestrrat-go/stl v0.0.0-20260904080308-f2792ffa3582/go.mod h1:GPUQvgZuU2dRAoW3Y+3KZcVrhyIE1HApAzTnDs9VcVc=
 github.com/pierrec/lz4/v4 v4.1.22 h1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=

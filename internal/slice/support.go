@@ -98,10 +98,10 @@ func overhangTips(layers []Layer, L int, maxDXY, tipR float64) []supNode {
 		if r.Outer.Area() < supportMinOverhang {
 			continue
 		}
-		min, max := r.BoundingBox()
+		min, max := boundsOf(r.BoundingBox())
 		for x := min.X + supportSampleSpacing*0.5; x < max.X; x += supportSampleSpacing {
 			for y := min.Y + supportSampleSpacing*0.5; y < max.Y; y += supportSampleSpacing {
-				p := Point2{x, y}
+				p := Point2{X: x, Y: y}
 				if exContains(r, p) {
 					tips = append(tips, supNode{pt: p, r: tipR})
 				}
@@ -126,7 +126,7 @@ func mergeAndLean(nodes []supNode, leanStep, maxR float64) []supNode {
 		if j < 0 {
 			continue
 		}
-		d := merged[i].pt.DistanceTo(merged[j].pt)
+		d := merged[i].pt.Dist(merged[j].pt)
 		if d < 1e-6 {
 			continue
 		}
@@ -151,7 +151,7 @@ func mergeOverlapping(nodes []supNode, maxR float64) []supNode {
 			if used[j] {
 				continue
 			}
-			if acc.pt.DistanceTo(nodes[j].pt) < acc.r+nodes[j].r {
+			if acc.pt.Dist(nodes[j].pt) < acc.r+nodes[j].r {
 				w1, w2 := acc.r*acc.r, nodes[j].r*nodes[j].r
 				acc.pt = acc.pt.Scale(w1).Add(nodes[j].pt.Scale(w2)).Scale(1 / (w1 + w2))
 				if nr := math.Sqrt(w1 + w2); nr < maxR {
@@ -174,7 +174,7 @@ func nearestOther(nodes []supNode, i int) int {
 		if j == i {
 			continue
 		}
-		if d := nodes[i].pt.DistanceTo(nodes[j].pt); d < bestD {
+		if d := nodes[i].pt.Dist(nodes[j].pt); d < bestD {
 			bestD, best = d, j
 		}
 	}
@@ -195,7 +195,7 @@ func supportCircles(nodes []supNode, width, speed float64) []Path {
 		pts := make([]Point2, 0, supportCircleSegs)
 		for i := 0; i < supportCircleSegs; i++ {
 			a := float64(i) / supportCircleSegs * 2 * math.Pi
-			pts = append(pts, Point2{n.pt.X + r*math.Cos(a), n.pt.Y + r*math.Sin(a)})
+			pts = append(pts, Point2{X: n.pt.X + r*math.Cos(a), Y: n.pt.Y + r*math.Sin(a)})
 		}
 		ps = append(ps, Path{Points: pts, Role: RoleSupport, Width: width, Speed: speed, Closed: true})
 	}

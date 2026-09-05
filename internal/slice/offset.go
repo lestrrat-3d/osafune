@@ -155,7 +155,7 @@ func ringPerimeter(r Polygon) float64 {
 	}
 	var l float64
 	for i := range n {
-		l += r[i].DistanceTo(r[(i+1)%n])
+		l += r[i].Dist(r[(i+1)%n])
 	}
 	return l
 }

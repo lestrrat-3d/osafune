@@ -13,7 +13,7 @@ import (
 // leftmost-turn rule keeps them as two separate loops of area 100.
 func TestChainSegmentsTouchingCorner(t *testing.T) {
 	seg := func(ax, ay, bx, by float64) segment2 {
-		return segment2{A: Point2{ax, ay}, B: Point2{bx, by}}
+		return segment2{A: Point2{X: ax, Y: ay}, B: Point2{X: bx, Y: by}}
 	}
 	segs := []segment2{
 		// square A
@@ -37,7 +37,7 @@ func TestChainSegmentsTouchingCorner(t *testing.T) {
 // square chains into one loop of the right area.
 func TestChainSegmentsSimpleSquare(t *testing.T) {
 	seg := func(ax, ay, bx, by float64) segment2 {
-		return segment2{A: Point2{ax, ay}, B: Point2{bx, by}}
+		return segment2{A: Point2{X: ax, Y: ay}, B: Point2{X: bx, Y: by}}
 	}
 	segs := []segment2{
 		seg(0, 0, 4, 0), seg(4, 0, 4, 4), seg(4, 4, 0, 4), seg(0, 4, 0, 0),

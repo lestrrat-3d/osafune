@@ -124,7 +124,7 @@ func chainSegments(segs []segment2) []Polygon {
 		}
 		// Drop polygons too small to matter (degenerate intersections).
 		if len(poly) >= 3 {
-			if poly[len(poly)-1].Equal(poly[0]) {
+			if samePoint(poly[len(poly)-1], poly[0]) {
 				poly = poly[:len(poly)-1]
 			}
 			if len(poly) >= 3 && poly.Area() > 1e-4 {
