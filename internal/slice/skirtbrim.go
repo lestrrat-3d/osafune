@@ -32,7 +32,7 @@ func GenerateSkirtBrim(layer *Layer, process *config.ResolvedProcess, lineWidth,
 	// Skirt first so it heads the adhesion group (priming before anything).
 	if process.SkirtLoops > 0 {
 		base := process.SkirtDistance + process.BrimWidth + lineWidth*0.5
-		for i := 0; i < process.SkirtLoops; i++ {
+		for i := range process.SkirtLoops {
 			d := -(base + float64(i)*lineWidth) // negative = outward
 			loops = appendOuterLoops(loops, offsetRegions(layer.Contours, d), lineWidth, speed)
 		}
@@ -41,7 +41,7 @@ func GenerateSkirtBrim(layer *Layer, process *config.ResolvedProcess, lineWidth,
 	// Brim: hug the object, stepping outward from the wall.
 	if process.BrimWidth > 0 {
 		n := int(math.Round(process.BrimWidth / lineWidth))
-		for i := 0; i < n; i++ {
+		for i := range n {
 			d := -(lineWidth*0.5 + float64(i)*lineWidth) // negative = outward
 			loops = appendOuterLoops(loops, offsetRegions(layer.Contours, d), lineWidth, speed)
 		}

@@ -291,12 +291,12 @@ func (d *ToolpathDrawer) downsample(ow, oh, ss int) {
 	}
 	rw := ow * ss
 	n := ss * ss
-	for oy := 0; oy < oh; oy++ {
-		for ox := 0; ox < ow; ox++ {
+	for oy := range oh {
+		for ox := range ow {
 			var r, g, b, a int
-			for dy := 0; dy < ss; dy++ {
+			for dy := range ss {
 				base := ((oy*ss+dy)*rw + ox*ss) * 4
-				for dx := 0; dx < ss; dx++ {
+				for dx := range ss {
 					o := base + dx*4
 					r += int(d.rgba[o])
 					g += int(d.rgba[o+1])
@@ -317,24 +317,15 @@ func (d *ToolpathDrawer) downsample(ow, oh, ss int) {
 // appends them to d.tris, parallelized over layers into reused per-worker
 // buffers (the same pattern as the shell projection).
 func (d *ToolpathDrawer) appendBeads(layers []slice.Layer, vp *ViewProj, w, h int) {
-	nw := runtime.NumCPU()
-	if nw > len(layers) {
-		nw = len(layers)
-	}
-	if nw < 1 {
-		nw = 1
-	}
+	nw := max(min(runtime.NumCPU(), len(layers)), 1)
 	if len(d.triBufs) != nw {
 		d.triBufs = make([][]rtri, nw)
 	}
 	chunk := (len(layers) + nw - 1) / nw
 	var wg sync.WaitGroup
-	for wi := 0; wi < nw; wi++ {
+	for wi := range nw {
 		lo := wi * chunk
-		hi := lo + chunk
-		if hi > len(layers) {
-			hi = len(layers)
-		}
+		hi := min(lo+chunk, len(layers))
 		if lo >= hi {
 			d.triBufs[wi] = d.triBufs[wi][:0]
 			continue
@@ -352,7 +343,7 @@ func (d *ToolpathDrawer) appendBeads(layers []slice.Layer, vp *ViewProj, w, h in
 		}(wi, lo, hi)
 	}
 	wg.Wait()
-	for wi := 0; wi < nw; wi++ {
+	for wi := range nw {
 		d.tris = append(d.tris, d.triBufs[wi]...)
 	}
 }
@@ -384,7 +375,7 @@ func appendLayerBeads(dst []rtri, layer *slice.Layer, vp *ViewProj, eye mesh.Vec
 		if p.Closed {
 			nseg = n
 		}
-		for i := 0; i < nseg; i++ {
+		for i := range nseg {
 			a := p.Points[i]
 			b := p.Points[(i+1)%n]
 			appendBox(&dst, vp, eye, fw, fh,
@@ -461,21 +452,18 @@ func (d *ToolpathDrawer) rasterize(w, h int) {
 	band := (h + nw - 1) / nw
 	var wg sync.WaitGroup
 	for y0 := 0; y0 < h; y0 += band {
-		y1 := y0 + band
-		if y1 > h {
-			y1 = h
-		}
+		y1 := min(y0+band, h)
 		wg.Add(1)
 		go func(y0, y1 int) {
 			defer wg.Done()
-			d.rasterBand(w, h, y0, y1)
+			d.rasterBand(w, y0, y1)
 		}(y0, y1)
 	}
 	wg.Wait()
 }
 
 // rasterBand rasterizes every triangle clipped to rows [y0, y1).
-func (d *ToolpathDrawer) rasterBand(w, h, y0, y1 int) {
+func (d *ToolpathDrawer) rasterBand(w, y0, y1 int) {
 	for ti := range d.tris {
 		t := &d.tris[ti]
 		minX := int(math.Floor(float64(min3(t.ax, t.bx, t.cx))))

@@ -66,7 +66,7 @@ func (b *objectPaneBody) Build(context *guigui.Context, adder *guigui.ChildAdder
 		n = len(b.scene.Objects)
 	}
 	b.rows.SetLen(n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		row := b.rows.At(i)
 		row.bind(b.scene, i, b.onChange)
 		adder.AddWidget(row)
@@ -87,7 +87,7 @@ func (b *objectPaneBody) Layout(context *guigui.Context, widgetBounds *guigui.Wi
 		Widget: &b.header,
 		Size:   guigui.FixedSize(u + u/2),
 	})
-	for i := 0; i < b.rows.Len(); i++ {
+	for i := range b.rows.Len() {
 		b.layoutItems = append(b.layoutItems, guigui.LinearLayoutItem{
 			Widget: b.rows.At(i),
 			Size:   guigui.FixedSize(u + u/4),

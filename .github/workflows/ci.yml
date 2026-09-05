@@ -11,17 +11,11 @@ permissions:
   contents: read
 
 jobs:
-  # Tier 1: the cheap checks run first. The heavier tiers below gate on this
-  # via `needs`, so a formatting or vet failure short-circuits the pipeline
-  # before any cross-platform test job starts.
-  #
-  # golangci-lint is not here yet. The house config reports 73 findings against
-  # this tree, and several are musttag on the structs that define the on-disk
-  # project format, where a careless tag would rename a persisted JSON key.
-  # Cleaning that up is its own change; this job is the placeholder gate until
-  # then.
-  vet:
-    name: vet and gofmt
+  # Tier 1: lint runs first. The heavier tiers below gate on it via `needs`,
+  # so a lint failure short-circuits the pipeline before any cross-platform
+  # test job starts.
+  lint:
+    name: golangci-lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -42,14 +36,11 @@ jobs:
             libxi-dev libxinerama-dev libxrandr-dev libxxf86vm-dev \
             libasound2-dev pkg-config
 
-      - name: Check formatting
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "these files are not gofmt-clean:"
-            echo "$unformatted"
-            exit 1
-          fi
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          args: --timeout=5m
 
       - name: Run go vet
         run: go vet ./...
@@ -59,7 +50,7 @@ jobs:
   # coverage. The suite is headless — nothing here opens a window — so no
   # display server is needed on any runner.
   test:
-    needs: vet
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +87,7 @@ jobs:
 
   # Tier 2: verify the tree is tidy.
   verify:
-    needs: vet
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -117,7 +108,7 @@ jobs:
 
   # Tier 2: vulnerability scan of the module and its dependencies.
   govulncheck:
-    needs: vet
+    needs: lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

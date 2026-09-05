@@ -17,11 +17,11 @@ func TestOffsetExPolygon_ShrinksSquare(t *testing.T) {
 	require.Len(t, out, 1)
 	require.InDelta(t, 64.0, out[0].Outer.Area(), 1e-3)
 	bb := out[0].Outer.BoundingBox()
-	min, max := bb.Min, bb.Max
-	require.InDelta(t, 1.0, min.X, 1e-6)
-	require.InDelta(t, 1.0, min.Y, 1e-6)
-	require.InDelta(t, 9.0, max.X, 1e-6)
-	require.InDelta(t, 9.0, max.Y, 1e-6)
+	lo, hi := bb.Min, bb.Max
+	require.InDelta(t, 1.0, lo.X, 1e-6)
+	require.InDelta(t, 1.0, lo.Y, 1e-6)
+	require.InDelta(t, 9.0, hi.X, 1e-6)
+	require.InDelta(t, 9.0, hi.Y, 1e-6)
 }
 
 func TestOffsetExPolygon_OvershrinkCollapses(t *testing.T) {

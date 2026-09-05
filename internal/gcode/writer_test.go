@@ -32,8 +32,8 @@ func emit(t *testing.T, printer config.ResolvedPrinter, fil config.ResolvedFilam
 // that the start/end gcode templates happen to contain (the default end
 // gcode includes its own " ; retract" comment, for instance).
 func printBody(out string) string {
-	if i := strings.Index(out, "; --- osafune end gcode ---"); i >= 0 {
-		return out[:i]
+	if before, _, ok := strings.Cut(out, "; --- osafune end gcode ---"); ok {
+		return before
 	}
 	return out
 }
@@ -110,11 +110,11 @@ func TestFanOffFirstLayerThenOn(t *testing.T) {
 // eValueOnLine returns the E argument of the first G1 line containing marker.
 func eValueOnLine(t *testing.T, out, marker string) float64 {
 	t.Helper()
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if !strings.Contains(line, marker) {
 			continue
 		}
-		for _, tok := range strings.Fields(line) {
+		for tok := range strings.FieldsSeq(line) {
 			if strings.HasPrefix(tok, "E") {
 				v, err := strconv.ParseFloat(tok[1:], 64)
 				require.NoError(t, err)

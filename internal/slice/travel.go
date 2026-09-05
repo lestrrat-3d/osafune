@@ -37,7 +37,7 @@ func OptimizeTravel(layer *Layer) {
 // at their nearer end. It returns the head position after the last path.
 func orderRun(run []Path, head Point2, out *[]Path) Point2 {
 	visited := make([]bool, len(run))
-	for count := 0; count < len(run); count++ {
+	for range run {
 		best := -1
 		var bestCost float64
 		bestFlip := false

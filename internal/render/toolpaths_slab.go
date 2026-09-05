@@ -94,7 +94,7 @@ func sweepRing(out []wtri, ring slice.Polygon, z0, z1 float32, shade func(mesh.V
 	if n < 3 {
 		return out
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p := ring[i]
 		q := ring[(i+1)%n]
 		px, py := float32(p.X), float32(p.Y)
@@ -168,12 +168,9 @@ func (d *ToolpathDrawer) projectSlab(w, h int, vp *ViewProj) {
 		}
 		chunk := (len(src) + nw - 1) / nw
 		var wg sync.WaitGroup
-		for wi := 0; wi < nw; wi++ {
+		for wi := range nw {
 			lo := wi * chunk
-			hi := lo + chunk
-			if hi > len(src) {
-				hi = len(src)
-			}
+			hi := min(lo+chunk, len(src))
 			if lo >= hi {
 				d.slabBufs[wi] = d.slabBufs[wi][:0]
 				continue
@@ -186,7 +183,7 @@ func (d *ToolpathDrawer) projectSlab(w, h int, vp *ViewProj) {
 		}
 		wg.Wait()
 		d.tris = d.tris[:0]
-		for wi := 0; wi < nw; wi++ {
+		for wi := range nw {
 			d.tris = append(d.tris, d.slabBufs[wi]...)
 		}
 		return

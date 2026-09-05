@@ -94,9 +94,9 @@ func (r *Rasterizer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, scene *m
 
 	r.sorted = r.sorted[:0]
 
-	// Camera-space basis is the same for every triangle this frame; reuse it
-	// for backface culling without recomputing inside the inner loop.
-	eye, _, _, _ := cam.Basis()
+	// The eye is the same for every triangle this frame; reuse it for backface
+	// culling without recomputing inside the inner loop.
+	eye := cam.Eye()
 
 	for oi := range scene.Objects {
 		if scene.Objects[oi].Hidden {
@@ -164,7 +164,7 @@ func (r *Rasterizer) Draw(dst *ebiten.Image, dstBounds image.Rectangle, scene *m
 	if cap(r.verts) < need {
 		r.verts = make([]ebiten.Vertex, need)
 		r.indices = make([]uint16, need)
-		for i := 0; i < need; i++ {
+		for i := range need {
 			r.indices[i] = uint16(i)
 		}
 	} else {

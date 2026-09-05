@@ -75,11 +75,11 @@ func TestSliceMesh_CubeProducesOneSquarePerLayer(t *testing.T) {
 		c := l.Contours[0]
 		require.Empty(t, c.Holes, "cube has no holes")
 		bb := c.Outer.BoundingBox()
-		min, max := bb.Min, bb.Max
-		require.InDelta(t, 0.0, min.X, 1e-6, "layer %d minX", i)
-		require.InDelta(t, 0.0, min.Y, 1e-6, "layer %d minY", i)
-		require.InDelta(t, 10.0, max.X, 1e-6, "layer %d maxX", i)
-		require.InDelta(t, 10.0, max.Y, 1e-6, "layer %d maxY", i)
+		lo, hi := bb.Min, bb.Max
+		require.InDelta(t, 0.0, lo.X, 1e-6, "layer %d minX", i)
+		require.InDelta(t, 0.0, lo.Y, 1e-6, "layer %d minY", i)
+		require.InDelta(t, 10.0, hi.X, 1e-6, "layer %d maxX", i)
+		require.InDelta(t, 10.0, hi.Y, 1e-6, "layer %d maxY", i)
 		require.True(t, c.Outer.IsCCW(), "outer should be CCW")
 	}
 }

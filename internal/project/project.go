@@ -143,7 +143,7 @@ func (p *Project) AutoArrange(plateIdx int) error {
 			first = false
 			continue
 		}
-		for ax := 0; ax < 3; ax++ {
+		for ax := range 3 {
 			if b.Min[ax] < bounds.Min[ax] {
 				bounds.Min[ax] = b.Min[ax]
 			}
@@ -178,7 +178,7 @@ func (p *Project) PlateMesh(plateIdx int) mesh.Mesh {
 		t := inst.Transform.Translate
 		for _, tri := range obj.Mesh.Triangles {
 			moved := mesh.Triangle{Normal: tri.Normal}
-			for v := 0; v < 3; v++ {
+			for v := range 3 {
 				moved.Vertices[v] = mesh.Vec3{
 					tri.Vertices[v][0] + t[0],
 					tri.Vertices[v][1] + t[1],
@@ -186,7 +186,7 @@ func (p *Project) PlateMesh(plateIdx int) mesh.Mesh {
 				}
 			}
 			out.Triangles = append(out.Triangles, moved)
-			for v := 0; v < 3; v++ {
+			for v := range 3 {
 				out.Bounds.Extend(moved.Vertices[v])
 			}
 		}

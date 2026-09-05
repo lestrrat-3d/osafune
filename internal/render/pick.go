@@ -28,7 +28,7 @@ func (c *Camera) PickRay(sx, sy, fw, fh float32) (mesh.Vec3, mesh.Vec3) {
 func RayAABB(origin, dir mesh.Vec3, b mesh.AABB) (float32, bool) {
 	tmin := float32(math.Inf(-1))
 	tmax := float32(math.Inf(1))
-	for a := 0; a < 3; a++ {
+	for a := range 3 {
 		if math.Abs(float64(dir[a])) < 1e-9 {
 			if origin[a] < b.Min[a] || origin[a] > b.Max[a] {
 				return 0, false // parallel and outside this slab

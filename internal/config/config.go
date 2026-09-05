@@ -153,21 +153,27 @@ func (r *resolver) celsius(field string, v units.AffineValue) int {
 // limits and the start/end gcode templates that bracket every print all
 // live here.
 type Printer struct {
-	Name             string
-	GcodeFlavor      GcodeFlavor
-	BedSizeX         units.Value // usable build width
-	BedSizeY         units.Value // usable build depth
-	BedSizeZ         units.Value // usable build height
-	NozzleDiameter   units.Value // e.g. 0.4 mm
-	FilamentDiameter units.Value // e.g. 1.75 mm
+	Name             string      `json:"Name"`
+	GcodeFlavor      GcodeFlavor `json:"GcodeFlavor"`
+	BedSizeX         units.Value `json:"BedSizeX"`         // usable build width
+	BedSizeY         units.Value `json:"BedSizeY"`         // usable build depth
+	BedSizeZ         units.Value `json:"BedSizeZ"`         // usable build height
+	NozzleDiameter   units.Value `json:"NozzleDiameter"`   // e.g. 0.4 mm
+	FilamentDiameter units.Value `json:"FilamentDiameter"` // e.g. 1.75 mm
 	// Acceleration / speed limits emitted as M201/M203 at the top of the
 	// file. Zero means "do not emit a limit for this axis", and is written
 	// as a zero quantity rather than an unset field.
-	MaxAccelX, MaxAccelY, MaxAccelZ, MaxAccelE units.Value
-	MaxSpeedX, MaxSpeedY, MaxSpeedZ, MaxSpeedE units.Value
-	StartGcode                                 string
-	EndGcode                                   string
-	LayerChangeGcode                           string
+	MaxAccelX        units.Value `json:"MaxAccelX"`
+	MaxAccelY        units.Value `json:"MaxAccelY"`
+	MaxAccelZ        units.Value `json:"MaxAccelZ"`
+	MaxAccelE        units.Value `json:"MaxAccelE"`
+	MaxSpeedX        units.Value `json:"MaxSpeedX"`
+	MaxSpeedY        units.Value `json:"MaxSpeedY"`
+	MaxSpeedZ        units.Value `json:"MaxSpeedZ"`
+	MaxSpeedE        units.Value `json:"MaxSpeedE"`
+	StartGcode       string      `json:"StartGcode"`
+	EndGcode         string      `json:"EndGcode"`
+	LayerChangeGcode string      `json:"LayerChangeGcode"`
 }
 
 // ResolvedPrinter is [Printer] with every quantity converted to the units the
@@ -272,21 +278,21 @@ M84                          ; disable motors
 // material, not of the machine — swapping PLA for PETG changes them all
 // without touching the [Printer] profile.
 type Filament struct {
-	Name     string
-	Material string // free-form: "PLA", "PETG", "ABS"
+	Name     string `json:"Name"`
+	Material string `json:"Material"` // free-form: "PLA", "PETG", "ABS"
 	// NozzleTemp and BedTemp are a [units.AffineValue], because the Celsius
 	// scale's zero is not the kelvin's. That type has no arithmetic at all,
 	// which is the whole of what a setpoint needs: it is set, stored, and
 	// emitted.
-	NozzleTemp      units.AffineValue
-	BedTemp         units.AffineValue
-	FlowRatio       float64 // 1.0 = nominal
-	RetractLength   units.Value
-	RetractSpeed    units.Value
-	ZHop            units.Value // nozzle lift during a retracted travel; 0 disables
-	FanSpeed        int         // 0-255, part cooling fan speed after first few layers
-	BridgeFanSpeed  int         // 0-255, part cooling fan while printing bridges (usually max)
-	FilamentDensity units.Value // used for weight estimates in header
+	NozzleTemp      units.AffineValue `json:"NozzleTemp"`
+	BedTemp         units.AffineValue `json:"BedTemp"`
+	FlowRatio       float64           `json:"FlowRatio"` // 1.0 = nominal
+	RetractLength   units.Value       `json:"RetractLength"`
+	RetractSpeed    units.Value       `json:"RetractSpeed"`
+	ZHop            units.Value       `json:"ZHop"`            // nozzle lift during a retracted travel; 0 disables
+	FanSpeed        int               `json:"FanSpeed"`        // 0-255, part cooling fan speed after first few layers
+	BridgeFanSpeed  int               `json:"BridgeFanSpeed"`  // 0-255, part cooling fan while printing bridges (usually max)
+	FilamentDensity units.Value       `json:"FilamentDensity"` // used for weight estimates in header
 }
 
 // ResolvedFilament is [Filament] in the emitter's units. Temperatures are whole
@@ -349,74 +355,74 @@ func DefaultFilament() Filament {
 // are the knobs an end user tweaks most often; printer and filament tend
 // to stay fixed for a given build.
 type Process struct {
-	Name string
+	Name string `json:"Name"`
 
-	LayerHeight      units.Value
-	FirstLayerHeight units.Value
+	LayerHeight      units.Value `json:"LayerHeight"`
+	FirstLayerHeight units.Value `json:"FirstLayerHeight"`
 
-	LineWidth           units.Value // extruded line width for perimeters/infill
-	FirstLayerLineWidth units.Value
+	LineWidth           units.Value `json:"LineWidth"` // extruded line width for perimeters/infill
+	FirstLayerLineWidth units.Value `json:"FirstLayerLineWidth"`
 
-	Perimeters   int // wall count, >= 1
-	TopLayers    int // solid top layer count
-	BottomLayers int // solid bottom layer count
+	Perimeters   int `json:"Perimeters"`   // wall count, >= 1
+	TopLayers    int `json:"TopLayers"`    // solid top layer count
+	BottomLayers int `json:"BottomLayers"` // solid bottom layer count
 
 	// InfillDensity is the fraction of interior to fill, 0..1. The MVP
 	// renders that as line spacing = LineWidth / InfillDensity for the
 	// rectilinear pattern; multi-direction patterns (grid, triangles)
 	// adjust the spacing by the number of directions so that volumetric
 	// density still matches the requested fraction.
-	InfillDensity float64
+	InfillDensity float64 `json:"InfillDensity"`
 
 	// InfillPattern selects the fill geometry. See [InfillPattern].
-	InfillPattern InfillPattern
+	InfillPattern InfillPattern `json:"InfillPattern"`
 
 	// SeamPosition selects where closed-loop seams are placed. See
 	// [SeamPosition]. Empty is treated as [SeamAligned].
-	SeamPosition SeamPosition
+	SeamPosition SeamPosition `json:"SeamPosition"`
 
 	// SkirtLoops is the number of free-standing loops traced around the
 	// whole print on the first layer to prime the nozzle; 0 disables.
-	SkirtLoops int
+	SkirtLoops int `json:"SkirtLoops"`
 	// SkirtDistance is the gap between the object (or brim, if any) and
 	// the innermost skirt loop.
-	SkirtDistance units.Value
+	SkirtDistance units.Value `json:"SkirtDistance"`
 	// BrimWidth is how far the brim extends outward from the object's
 	// first-layer wall for bed adhesion; 0 disables. Rounded to a whole
 	// number of line-width loops.
-	BrimWidth units.Value
+	BrimWidth units.Value `json:"BrimWidth"`
 
 	// BridgeSpeed is the print speed for unsupported bridge surfaces,
 	// kept low so the spanning strands have time to cool taut.
-	BridgeSpeed units.Value
+	BridgeSpeed units.Value `json:"BridgeSpeed"`
 	// BridgeFlow scales the extrusion of bridge strands (1.0 = nominal). Some
 	// profiles reduce it slightly so the strand stretches without sagging.
-	BridgeFlow float64
+	BridgeFlow float64 `json:"BridgeFlow"`
 
 	// SupportEnable turns on tree (organic) support generation under
 	// overhangs. Off by default — supports add print time and need removal.
-	SupportEnable bool
+	SupportEnable bool `json:"SupportEnable"`
 	// SupportThreshold is the overhang angle from vertical beyond which a
 	// downward surface needs support; e.g. 50° supports surfaces that lean
 	// out more than 50° from straight up.
-	SupportThreshold units.Value
+	SupportThreshold units.Value `json:"SupportThreshold"`
 	// SupportBranchDiameter is the nominal diameter of a support branch
 	// tip; merged trunks grow thicker toward the bed.
-	SupportBranchDiameter units.Value
+	SupportBranchDiameter units.Value `json:"SupportBranchDiameter"`
 	// SupportSpeed is the print speed for support extrusions.
-	SupportSpeed units.Value
+	SupportSpeed units.Value `json:"SupportSpeed"`
 
-	TravelSpeed            units.Value
-	PerimeterSpeed         units.Value
-	ExternalPerimeterSpeed units.Value
-	InfillSpeed            units.Value
-	SolidInfillSpeed       units.Value
-	FirstLayerSpeed        units.Value
+	TravelSpeed            units.Value `json:"TravelSpeed"`
+	PerimeterSpeed         units.Value `json:"PerimeterSpeed"`
+	ExternalPerimeterSpeed units.Value `json:"ExternalPerimeterSpeed"`
+	InfillSpeed            units.Value `json:"InfillSpeed"`
+	SolidInfillSpeed       units.Value `json:"SolidInfillSpeed"`
+	FirstLayerSpeed        units.Value `json:"FirstLayerSpeed"`
 
 	// InfillAngles cycles through these angles for successive layers. Two
 	// alternating angles is the OrcaSlicer/PrusaSlicer default; the MVP
 	// keeps it that simple.
-	InfillAngles []units.Value
+	InfillAngles []units.Value `json:"InfillAngles"`
 }
 
 // ResolvedProcess is [Process] in the pipeline's units: millimetres for

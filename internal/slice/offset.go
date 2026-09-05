@@ -56,13 +56,13 @@ func dropOffsetSpikes(result, input []ExPolygon, d float64) []ExPolygon {
 	if len(result) == 0 {
 		return result
 	}
-	min, max, ok := regionsBBox(input)
+	rawLo, rawHi, ok := regionsBBox(input)
 	if !ok {
 		return result
 	}
 	const margin = 1.0 // mm of slack beyond the provable |d| reach
-	lo := Point2{X: min.X - d - margin, Y: min.Y - d - margin}
-	hi := Point2{X: max.X + d + margin, Y: max.Y + d + margin}
+	lo := Point2{X: rawLo.X - d - margin, Y: rawLo.Y - d - margin}
+	hi := Point2{X: rawHi.X + d + margin, Y: rawHi.Y + d + margin}
 	inside := func(p Point2) bool {
 		return p.X >= lo.X && p.X <= hi.X && p.Y >= lo.Y && p.Y <= hi.Y
 	}
@@ -95,20 +95,20 @@ func dropOffsetSpikes(result, input []ExPolygon, d float64) []ExPolygon {
 
 // regionsBBox returns the axis-aligned bounds of every outer contour in
 // regions. ok is false when there is no non-empty contour.
-func regionsBBox(regions []ExPolygon) (min, max Point2, ok bool) {
+func regionsBBox(regions []ExPolygon) (lo, hi Point2, ok bool) {
 	for _, e := range regions {
 		for _, p := range e.Outer {
 			if !ok {
-				min, max, ok = p, p, true
+				lo, hi, ok = p, p, true
 				continue
 			}
-			min.X = math.Min(min.X, p.X)
-			min.Y = math.Min(min.Y, p.Y)
-			max.X = math.Max(max.X, p.X)
-			max.Y = math.Max(max.Y, p.Y)
+			lo.X = math.Min(lo.X, p.X)
+			lo.Y = math.Min(lo.Y, p.Y)
+			hi.X = math.Max(hi.X, p.X)
+			hi.Y = math.Max(hi.Y, p.Y)
 		}
 	}
-	return min, max, ok
+	return lo, hi, ok
 }
 
 // dropThinRegions removes connected components whose mean width is below
