@@ -129,8 +129,20 @@ func (r *resolver) degrees(field string, v units.Value) float64 {
 
 // celsius rounds to the whole degree gcode carries: M104 and M140 take an
 // integer, so a fractional setpoint has nowhere to go.
-func (r *resolver) celsius(field string, v units.Value) int {
-	x := r.in(field, v, units.Celsius)
+//
+// It takes a [units.AffineValue], because a temperature on the Celsius scale is
+// one: its zero is not the kelvin's, so it has no arithmetic and its own type
+// says so. Reading it back out in degrees Celsius is a conversion, which is
+// exactly what a setpoint needs.
+func (r *resolver) celsius(field string, v units.AffineValue) int {
+	if r.err != nil {
+		return 0
+	}
+	x, err := v.InAffine(units.Celsius)
+	if err != nil {
+		r.err = fmt.Errorf("config: %s: %w", field, err)
+		return 0
+	}
 	if x < 0 {
 		return int(x - 0.5)
 	}
@@ -262,13 +274,13 @@ M84                          ; disable motors
 type Filament struct {
 	Name     string
 	Material string // free-form: "PLA", "PETG", "ABS"
-	// NozzleTemp and BedTemp are carried in [units.Celsius], which is an
-	// affine unit: it converts, compares and persists, but does no
-	// arithmetic. Nothing here needs any — a setpoint is set, stored and
+	// NozzleTemp and BedTemp are a [units.AffineValue], because the Celsius
+	// scale's zero is not the kelvin's. That type has no arithmetic at all,
+	// which is the whole of what a setpoint needs: it is set, stored, and
 	// emitted.
-	NozzleTemp      units.Value
-	BedTemp         units.Value
-	FlowRatio       float64     // 1.0 = nominal
+	NozzleTemp      units.AffineValue
+	BedTemp         units.AffineValue
+	FlowRatio       float64 // 1.0 = nominal
 	RetractLength   units.Value
 	RetractSpeed    units.Value
 	ZHop            units.Value // nozzle lift during a retracted travel; 0 disables
