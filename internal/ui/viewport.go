@@ -5,6 +5,7 @@ package ui
 import (
 	"image"
 	"image/color"
+	"log/slog"
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -13,6 +14,8 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 
 	"github.com/guigui-gui/guigui"
+
+	"github.com/lestrrat-3d/units"
 
 	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/mesh"
@@ -483,7 +486,11 @@ func (v *Viewport) applyGizmoDrag(bounds image.Rectangle, cx, cy int) {
 	}
 	// Screen Y points down, so atan2 sweeps clockwise-positive; negate so
 	// dragging a ring counter-clockwise turns the part counter-clockwise.
-	obj.Mesh.Rotate(v.gizmoCenter, gizmoAxis(v.gizmoElem), -delta)
+	// delta came out of atan2, so radians is what it is; naming that here is
+	// the whole point of the typed angle.
+	if err := obj.Mesh.Rotate(v.gizmoCenter, gizmoAxis(v.gizmoElem), units.Radians(-delta)); err != nil {
+		slog.Error("rotate object", "err", err)
+	}
 }
 
 func gizmoAxis(e render.GizmoElement) mesh.Axis {
