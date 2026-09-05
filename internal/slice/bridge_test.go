@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
@@ -62,7 +61,7 @@ func TestSplitBridgesFirstLayerNeverBridges(t *testing.T) {
 
 func TestGenerateBridgesTagsAndSpeeds(t *testing.T) {
 	t.Parallel()
-	proc := config.DefaultProcess()
+	proc := defaultProcess(t)
 	proc.BridgeSpeed = 22
 	proc.BridgeFlow = 0.9
 	layer := slice.Layer{Index: 5}

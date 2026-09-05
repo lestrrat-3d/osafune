@@ -18,7 +18,7 @@ import (
 // The caller passes a single mesh: project-level concerns (multiple
 // instances, plates, translations) are handled by [project.Project.PlateMesh]
 // before this function ever sees the geometry.
-func Slice(m *mesh.Mesh, printer *config.Printer, process *config.Process) []Layer {
+func Slice(m *mesh.Mesh, printer *config.ResolvedPrinter, process *config.ResolvedProcess) []Layer {
 	if len(m.Triangles) == 0 {
 		return nil
 	}

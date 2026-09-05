@@ -18,7 +18,7 @@ import (
 // [config.InfillPattern] at the chosen density. This is geometric skin
 // detection — a shape that narrows upward now gets a solid top exactly
 // where it loses the layer above, instead of a thin sparse top.
-func GenerateInfill(layer *Layer, solidAreas, sparseAreas []ExPolygon, process *config.Process) {
+func GenerateInfill(layer *Layer, solidAreas, sparseAreas []ExPolygon, process *config.ResolvedProcess) {
 	width := process.LineWidth
 	if layer.Index == 0 {
 		width = process.FirstLayerLineWidth

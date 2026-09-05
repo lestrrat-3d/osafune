@@ -343,9 +343,14 @@ func (r *Root) flushPending() {
 	// the model in its file-native location while the slicer (via
 	// [project.Project.AutoArrange]) operates on a bed-centred copy, and
 	// the toolpath preview ends up offset from the visible mesh.
-	printer := config.DefaultPrinter()
+	profile := config.DefaultPrinter()
 	if r.loadedPlate != nil {
-		printer = r.loadedPlate.Printer
+		profile = r.loadedPlate.Printer
+	}
+	printer, err := profile.Resolve()
+	if err != nil {
+		slog.Error("printer profile", "path", path, "err", err)
+		return
 	}
 	placeSceneOnBed(scene, printer)
 	r.viewport.SetBedSize(printer.BedSizeX, printer.BedSizeY)
@@ -372,7 +377,7 @@ func (r *Root) flushPending() {
 // minimum Z lands on 0 (bed level) and its XY footprint is centred on
 // the printer's build area. Mutates the scene in place. The fallback
 // when the scene has no triangles (or no bounds) is a no-op.
-func placeSceneOnBed(s *mesh.Scene, printer config.Printer) {
+func placeSceneOnBed(s *mesh.Scene, printer config.ResolvedPrinter) {
 	b := s.Bounds()
 	if b.Empty() {
 		return
@@ -425,9 +430,21 @@ func (r *Root) runSlice() {
 		plate.Process = cp.Process
 		// Re-arrange for the (possibly non-default) bed now that the printer
 		// is the one we'll actually slice with.
-		proj.AutoArrange(0)
+		if err := proj.AutoArrange(0); err != nil {
+			slog.Error("arrange plate", "err", err)
+			r.sliceCh <- sliceResult{scene: scene}
+			guigui.RequestRebuild(r)
+			return
+		}
+		resolved, err := plate.Resolve()
+		if err != nil {
+			slog.Error("plate profiles", "err", err)
+			r.sliceCh <- sliceResult{scene: scene}
+			guigui.RequestRebuild(r)
+			return
+		}
 		m := proj.PlateMesh(0)
-		layers := slice.Slice(&m, &plate.Printer, &plate.Process)
+		layers := slice.Slice(&m, &resolved.Printer, &resolved.Process)
 		// Buffered, 1-slot, and slicing gate prevents concurrent
 		// senders — this send is non-blocking in practice.
 		r.sliceCh <- sliceResult{scene: scene, project: proj, layers: layers}
@@ -507,7 +524,12 @@ func (r *Root) saveGcode() {
 	bw := bufio.NewWriter(f)
 	defer bw.Flush()
 	plate := &r.project.Plates[0]
-	if err := gcode.Write(bw, r.lastLayers, &plate.Printer, &plate.Filament, &plate.Process); err != nil {
+	resolved, err := plate.Resolve()
+	if err != nil {
+		slog.Error("plate profiles", "path", path, "err", err)
+		return
+	}
+	if err := gcode.Write(bw, r.lastLayers, &resolved.Printer, &resolved.Filament, &resolved.Process); err != nil {
 		slog.Error("write gcode", "path", path, "err", err)
 		return
 	}

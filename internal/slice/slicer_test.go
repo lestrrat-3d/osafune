@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/mesh"
 	"github.com/lestrrat-3d/osafune/internal/slice"
 )
@@ -88,8 +87,8 @@ func TestSlice_CubeFullPipeline(t *testing.T) {
 	t.Parallel()
 	m := cube(10)
 
-	printer := config.DefaultPrinter()
-	process := config.DefaultProcess()
+	printer := defaultPrinter(t)
+	process := defaultProcess(t)
 	process.Perimeters = 2
 	process.InfillDensity = 0.2
 	process.TopLayers = 3

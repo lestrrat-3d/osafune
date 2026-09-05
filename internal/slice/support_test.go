@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
@@ -40,7 +39,7 @@ func countSupport(paths []slice.Path) int {
 
 func TestGenerateSupportsUnderOverhang(t *testing.T) {
 	t.Parallel()
-	proc := config.DefaultProcess()
+	proc := defaultProcess(t)
 	proc.SupportEnable = true
 	proc.SupportThreshold = 50
 	proc.SupportBranchDiameter = 2
@@ -74,7 +73,7 @@ func TestGenerateSupportsUnderOverhang(t *testing.T) {
 
 func TestGenerateSupportsNoneWithoutOverhang(t *testing.T) {
 	t.Parallel()
-	proc := config.DefaultProcess()
+	proc := defaultProcess(t)
 	proc.SupportEnable = true
 	// A plain vertical column overhangs nothing.
 	var layers []slice.Layer

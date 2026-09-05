@@ -14,7 +14,7 @@ import "github.com/lestrrat-3d/osafune/internal/config"
 //
 // The first layer uses FirstLayerLineWidth / FirstLayerSpeed; subsequent
 // layers use LineWidth / PerimeterSpeed / ExternalPerimeterSpeed.
-func GeneratePerimeters(layer *Layer, process *config.Process) []ExPolygon {
+func GeneratePerimeters(layer *Layer, process *config.ResolvedProcess) []ExPolygon {
 	if process.Perimeters < 1 {
 		return layer.Contours
 	}
@@ -61,7 +61,7 @@ func GeneratePerimeters(layer *Layer, process *config.Process) []ExPolygon {
 	return infillAreas
 }
 
-func perimeterParams(layer *Layer, process *config.Process) (width, extSpeed, intSpeed float64) {
+func perimeterParams(layer *Layer, process *config.ResolvedProcess) (width, extSpeed, intSpeed float64) {
 	if layer.Index == 0 {
 		return process.FirstLayerLineWidth, process.FirstLayerSpeed, process.FirstLayerSpeed
 	}

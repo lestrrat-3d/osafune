@@ -45,6 +45,34 @@ type Plate struct {
 	Instances []ModelInstance
 }
 
+// ResolvedPlate is a plate's three profiles converted to the units the
+// slicing pipeline and the gcode emitter work in. Slicing a plate takes one
+// of these rather than the profiles themselves, so the unit checks happen
+// once per plate instead of once per toolpath.
+type ResolvedPlate struct {
+	Printer  config.ResolvedPrinter
+	Filament config.ResolvedFilament
+	Process  config.ResolvedProcess
+}
+
+// Resolve converts the plate's three profiles, reporting the first field
+// whose quantity is not of the kind that field measures.
+func (p *Plate) Resolve() (ResolvedPlate, error) {
+	printer, err := p.Printer.Resolve()
+	if err != nil {
+		return ResolvedPlate{}, err
+	}
+	filament, err := p.Filament.Resolve()
+	if err != nil {
+		return ResolvedPlate{}, err
+	}
+	process, err := p.Process.Resolve()
+	if err != nil {
+		return ResolvedPlate{}, err
+	}
+	return ResolvedPlate{Printer: printer, Filament: filament, Process: process}, nil
+}
+
 // Project is the unit a user opens, edits and saves. It owns the meshes
 // and the plates that reference them. The MVP keeps everything in memory
 // — there is no on-disk project format yet.
@@ -76,7 +104,10 @@ func NewFromScene(s *mesh.Scene) *Project {
 		plate.Instances = append(plate.Instances, ModelInstance{ObjectIndex: i})
 	}
 	p.Plates = []Plate{plate}
-	p.AutoArrange(0)
+	// The plate carries the built-in default profiles, whose quantities are
+	// built from the units package's own constructors, so the only failure
+	// AutoArrange can report cannot arise here.
+	_ = p.AutoArrange(0)
 	return p
 }
 
@@ -86,10 +117,18 @@ func NewFromScene(s *mesh.Scene) *Project {
 // one instance per plate, but the API takes the whole plate so multi-
 // instance layouts can later replace the body with a real packing
 // algorithm without changing callers.
-func (p *Project) AutoArrange(plateIdx int) {
+//
+// It reports an error when the plate's printer profile carries a bed size
+// that is not a length, because the centre of the build area cannot be
+// computed without one.
+func (p *Project) AutoArrange(plateIdx int) error {
 	plate := &p.Plates[plateIdx]
 	if len(plate.Instances) == 0 {
-		return
+		return nil
+	}
+	printer, err := plate.Printer.Resolve()
+	if err != nil {
+		return err
 	}
 	// Compute the union AABB of the source meshes (untransformed).
 	var bounds mesh.AABB
@@ -114,17 +153,18 @@ func (p *Project) AutoArrange(plateIdx int) {
 		}
 	}
 	if first {
-		return
+		return nil
 	}
 	cx := (bounds.Min[0] + bounds.Max[0]) * 0.5
 	cy := (bounds.Min[1] + bounds.Max[1]) * 0.5
-	tx := float32(plate.Printer.BedSizeX*0.5) - cx
-	ty := float32(plate.Printer.BedSizeY*0.5) - cy
+	tx := float32(printer.BedSizeX*0.5) - cx
+	ty := float32(printer.BedSizeY*0.5) - cy
 	tz := -bounds.Min[2]
 	t := mesh.Vec3{tx, ty, tz}
 	for i := range plate.Instances {
 		plate.Instances[i].Transform.Translate = t
 	}
+	return nil
 }
 
 // PlateMesh returns the union of every instance's transformed mesh on the

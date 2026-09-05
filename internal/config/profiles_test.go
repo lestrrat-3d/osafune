@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/lestrrat-3d/units"
+
 	"github.com/lestrrat-3d/osafune/internal/config"
 )
 
@@ -13,14 +15,14 @@ func TestProfileRoundTrip(t *testing.T) {
 
 	p := config.DefaultProcess()
 	p.Name = "My Fast"
-	p.LayerHeight = 0.28
+	p.LayerHeight = units.Millimeters(0.28)
 	p.InfillDensity = 0.42
 	require.NoError(t, config.SaveProfile(config.KindProcess, p.Name, p))
 
 	got, err := config.LoadProfile[config.Process](config.KindProcess, p.Name)
 	require.NoError(t, err)
 	require.Equal(t, "My Fast", got.Name)
-	require.Equal(t, 0.28, got.LayerHeight)
+	require.Equal(t, units.Millimeters(0.28), got.LayerHeight)
 	require.Equal(t, 0.42, got.InfillDensity)
 
 	names, err := config.ListProfiles(config.KindProcess)

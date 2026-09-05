@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
@@ -41,7 +40,7 @@ func countRole(paths []slice.Path, role slice.PathRole) int {
 
 func TestGenerateSkirtLoopsOutsideAndFirst(t *testing.T) {
 	t.Parallel()
-	proc := config.DefaultProcess()
+	proc := defaultProcess(t)
 	proc.SkirtLoops = 2
 	proc.SkirtDistance = 2.0
 	proc.BrimWidth = 0
@@ -69,7 +68,7 @@ func TestGenerateSkirtLoopsOutsideAndFirst(t *testing.T) {
 
 func TestGenerateBrimLoopCount(t *testing.T) {
 	t.Parallel()
-	proc := config.DefaultProcess()
+	proc := defaultProcess(t)
 	proc.SkirtLoops = 0
 	proc.BrimWidth = 2.0 // / 0.4 line width = 5 loops
 
@@ -84,7 +83,7 @@ func TestGenerateBrimLoopCount(t *testing.T) {
 
 func TestSkirtBrimDisabled(t *testing.T) {
 	t.Parallel()
-	proc := config.DefaultProcess()
+	proc := defaultProcess(t)
 	proc.SkirtLoops = 0
 	proc.BrimWidth = 0
 	layer := slice.Layer{Index: 0, Contours: []slice.ExPolygon{square10()}}

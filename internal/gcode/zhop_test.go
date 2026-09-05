@@ -6,7 +6,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/lestrrat-3d/osafune/internal/config"
 	"github.com/lestrrat-3d/osafune/internal/slice"
 )
 
@@ -24,8 +23,8 @@ func twoFarPaths() []slice.Layer {
 
 func TestZHopOnLongTravel(t *testing.T) {
 	t.Parallel()
-	fil := config.DefaultFilament() // ZHop 0.4
-	out := emit(t, config.DefaultPrinter(), fil, config.DefaultProcess(), twoFarPaths())
+	fil := defaultFilament(t) // ZHop 0.4
+	out := emit(t, defaultPrinter(t), fil, defaultProcess(t), twoFarPaths())
 	body := printBody(out)
 
 	require.Contains(t, body, "G1 Z0.600 ; z-hop", "travel must lift to layerZ+ZHop (0.2+0.4)")
@@ -41,8 +40,8 @@ func TestZHopOnLongTravel(t *testing.T) {
 
 func TestZHopDisabled(t *testing.T) {
 	t.Parallel()
-	fil := config.DefaultFilament()
+	fil := defaultFilament(t)
 	fil.ZHop = 0
-	out := emit(t, config.DefaultPrinter(), fil, config.DefaultProcess(), twoFarPaths())
+	out := emit(t, defaultPrinter(t), fil, defaultProcess(t), twoFarPaths())
 	require.NotContains(t, printBody(out), "; z-hop", "z-hop disabled when ZHop<=0")
 }
