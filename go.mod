@@ -7,7 +7,7 @@ require (
 	github.com/hajimehoshi/ebiten/v2 v2.10.0-alpha.11.0.20260517123839-aa5fda041ba7
 	github.com/lestrrat-3d/units v0.0.0-20260905131018-03b7385d1af7
 	github.com/lestrrat-go/3mf v0.0.0-20260904080955-978cc39ea83e
-	github.com/lestrrat-go/polyclip v0.0.0-20260527004823-261e57bbb96e
+	github.com/lestrrat-go/polyclip v0.0.0-20260905223339-a5d5bd36ed25
 	github.com/lestrrat-go/stl v0.0.0-20260904080308-f2792ffa3582
 	github.com/sqweek/dialog v0.0.0-20260123140253-64c163d53aac
 	github.com/stretchr/testify v1.12.1

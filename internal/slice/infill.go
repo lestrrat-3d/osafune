@@ -146,14 +146,14 @@ func rectilinearLines(e ExPolygon, angleDeg, spacing float64) [][]Point2 {
 	// in the rotated frame; we slice the bbox with horizontal lines,
 	// then rotate the resulting segments back.
 	rot := func(p Point2) Point2 {
-		return Point2{p.X*cos + p.Y*sin, -p.X*sin + p.Y*cos}
+		return Point2{X: p.X*cos + p.Y*sin, Y: -p.X*sin + p.Y*cos}
 	}
 	unrot := func(p Point2) Point2 {
-		return Point2{p.X*cos - p.Y*sin, p.X*sin + p.Y*cos}
+		return Point2{X: p.X*cos - p.Y*sin, Y: p.X*sin + p.Y*cos}
 	}
 
 	rotated := rotateExPolygon(e, rot)
-	min, max := rotated.BoundingBox()
+	min, max := boundsOf(rotated.BoundingBox())
 	if max.Y-min.Y < spacing*0.5 {
 		return nil
 	}
@@ -173,8 +173,8 @@ func rectilinearLines(e ExPolygon, angleDeg, spacing float64) [][]Point2 {
 				continue
 			}
 			out = append(out, []Point2{
-				unrot(Point2{x0, y}),
-				unrot(Point2{x1, y}),
+				unrot(Point2{X: x0, Y: y}),
+				unrot(Point2{X: x1, Y: y}),
 			})
 		}
 	}
