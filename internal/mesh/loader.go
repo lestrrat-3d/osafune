@@ -11,7 +11,50 @@ import (
 
 	tmf "github.com/lestrrat-go/3mf"
 	"github.com/lestrrat-go/stl"
+
+	"github.com/lestrrat-3d/units"
 )
+
+// micron is the one 3MF length unit the units package does not predefine.
+// Registering it here keeps [millimeterScale] a single lookup table. The
+// factor is the number of millimetres in one micron, because the millimetre
+// is the base unit of [units.Length].
+var micron = units.Define("micron", units.Length, 0.001)
+
+// millimeterScale returns the factor that converts a coordinate expressed in
+// u into millimetres, which is the unit the rest of osafune works in. A 3MF
+// model declares its unit on the <model> element and is free to author
+// geometry in inches or metres, so coordinates cannot be used as-is.
+func millimeterScale(u tmf.Unit) (float64, error) {
+	var from units.Unit
+	switch u {
+	case tmf.UnitMicron:
+		from = micron
+	case tmf.UnitMillimeter:
+		from = units.Millimeter
+	case tmf.UnitCentimeter:
+		from = units.Centimeter
+	case tmf.UnitInch:
+		from = units.Inch
+	case tmf.UnitFoot:
+		from = units.Foot
+	case tmf.UnitMeter:
+		from = units.Meter
+	default:
+		return 0, fmt.Errorf("mesh: 3mf uses unsupported unit %q", u)
+	}
+	return units.New(1, from).In(units.Millimeter)
+}
+
+// scaleMatrix returns the uniform scale s as a 3MF affine transform.
+func scaleMatrix(s float64) tmf.Matrix {
+	return tmf.Matrix{
+		s, 0, 0,
+		0, s, 0,
+		0, 0, s,
+		0, 0, 0,
+	}
+}
 
 // LoadFile loads an STL or 3MF mesh from disk into a [Scene]. The format is
 // chosen by the file extension; the viewer's file dialog filters the same
@@ -94,6 +137,15 @@ func load3MF(path string) (*Scene, error) {
 		return nil, errors.New("mesh: 3mf model has no build items")
 	}
 
+	// Every coordinate in the file is in the model's declared unit. Folding
+	// the conversion into the outermost transform scales build items and
+	// nested components alike, so no vertex escapes it.
+	scale, err := millimeterScale(model.Unit())
+	if err != nil {
+		return nil, err
+	}
+	toMillimeters := scaleMatrix(scale)
+
 	scene := &Scene{}
 	// visiting guards against component cycles; the 3MF spec forbids them but
 	// nothing in the file format prevents a malformed model from including one.
@@ -105,7 +157,7 @@ func load3MF(path string) (*Scene, error) {
 			continue
 		}
 		var m Mesh
-		if err := emitObject(&m, res, obj, item.Transform, visiting); err != nil {
+		if err := emitObject(&m, res, obj, mulMatrix(item.Transform, toMillimeters), visiting); err != nil {
 			return nil, err
 		}
 		if len(m.Triangles) == 0 {
