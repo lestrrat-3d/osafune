@@ -1,6 +1,11 @@
 package mesh
 
-import "math"
+import (
+	"fmt"
+	"math"
+
+	"github.com/lestrrat-3d/units"
+)
 
 // Axis identifies a world axis for rotation. The viewport's gizmo rings map
 // to these directly.
@@ -12,16 +17,26 @@ const (
 	AxisZ
 )
 
-// Rotate spins every vertex (and normal) of the mesh by angle radians about
-// the line through center parallel to axis, then refreshes the bounds. Used
-// by the viewport's rotate gizmo, which applies small incremental angles as
-// the user drags. Normals rotate too (rotation preserves their length).
-func (m *Mesh) Rotate(center Vec3, axis Axis, angle float64) {
-	if angle == 0 || len(m.Triangles) == 0 {
-		return
+// Rotate spins every vertex (and normal) of the mesh by angle about the line
+// through center parallel to axis, then refreshes the bounds. Used by the
+// viewport's rotate gizmo, which applies small incremental angles as the user
+// drags. Normals rotate too, because a rotation preserves their length.
+//
+// The angle is a [units.Value] rather than a bare float64 so that no caller has
+// to remember whether this function reads radians or degrees. It reports an
+// error for a value that is not an angle at all; that is a programming error
+// rather than a condition to handle, but it is the one thing a bare float64
+// could not tell the caller.
+func (m *Mesh) Rotate(center Vec3, axis Axis, angle units.Value) error {
+	rad, err := angle.In(units.Radian)
+	if err != nil {
+		return fmt.Errorf("mesh: rotate: %w", err)
 	}
-	sin := float32(math.Sin(angle))
-	cos := float32(math.Cos(angle))
+	if rad == 0 || len(m.Triangles) == 0 {
+		return nil
+	}
+	sin := float32(math.Sin(rad))
+	cos := float32(math.Cos(rad))
 	// The two axes that move under a rotation about `axis`, in the order that
 	// makes (a,b) → (a·cos − b·sin, a·sin + b·cos) a positive (CCW) turn.
 	a, b := rotPlane(axis)
@@ -34,6 +49,7 @@ func (m *Mesh) Rotate(center Vec3, axis Axis, angle float64) {
 		rotateInPlane(&t.Normal, Vec3{}, a, b, sin, cos)
 	}
 	m.recomputeBounds()
+	return nil
 }
 
 // ScaleUniform scales every vertex about center by f (1.0 = no change), then
