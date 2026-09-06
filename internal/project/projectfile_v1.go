@@ -18,54 +18,76 @@ import (
 // never be added here, because nothing ever wrote it into a version-1 file.
 type (
 	v1Printer struct {
-		Name                                       string
-		GcodeFlavor                                config.GcodeFlavor
-		BedSizeX, BedSizeY, BedSizeZ               float64 // mm
-		NozzleDiameter, FilamentDiameter           float64 // mm
-		MaxAccelX, MaxAccelY, MaxAccelZ, MaxAccelE float64 // mm/s^2
-		MaxSpeedX, MaxSpeedY, MaxSpeedZ, MaxSpeedE float64 // mm/s
-		StartGcode, EndGcode, LayerChangeGcode     string
+		Name             string             `json:"Name"`
+		GcodeFlavor      config.GcodeFlavor `json:"GcodeFlavor"`
+		BedSizeX         float64            `json:"BedSizeX"`
+		BedSizeY         float64            `json:"BedSizeY"`
+		BedSizeZ         float64            `json:"BedSizeZ"` // mm
+		NozzleDiameter   float64            `json:"NozzleDiameter"`
+		FilamentDiameter float64            `json:"FilamentDiameter"` // mm
+		MaxAccelX        float64            `json:"MaxAccelX"`
+		MaxAccelY        float64            `json:"MaxAccelY"`
+		MaxAccelZ        float64            `json:"MaxAccelZ"`
+		MaxAccelE        float64            `json:"MaxAccelE"` // mm/s^2
+		MaxSpeedX        float64            `json:"MaxSpeedX"`
+		MaxSpeedY        float64            `json:"MaxSpeedY"`
+		MaxSpeedZ        float64            `json:"MaxSpeedZ"`
+		MaxSpeedE        float64            `json:"MaxSpeedE"` // mm/s
+		StartGcode       string             `json:"StartGcode"`
+		EndGcode         string             `json:"EndGcode"`
+		LayerChangeGcode string             `json:"LayerChangeGcode"`
 	}
 
 	v1Filament struct {
-		Name, Material           string
-		NozzleTemp, BedTemp      int     // °C
-		FlowRatio                float64 //
-		RetractLength            float64 // mm
-		RetractSpeed             float64 // mm/s
-		ZHop                     float64 // mm
-		FanSpeed, BridgeFanSpeed int
-		FilamentDensity          float64 // g/cm^3
+		Name            string  `json:"Name"`
+		Material        string  `json:"Material"`
+		NozzleTemp      int     `json:"NozzleTemp"`
+		BedTemp         int     `json:"BedTemp"`       // °C
+		FlowRatio       float64 `json:"FlowRatio"`     //
+		RetractLength   float64 `json:"RetractLength"` // mm
+		RetractSpeed    float64 `json:"RetractSpeed"`  // mm/s
+		ZHop            float64 `json:"ZHop"`          // mm
+		FanSpeed        int     `json:"FanSpeed"`
+		BridgeFanSpeed  int     `json:"BridgeFanSpeed"`
+		FilamentDensity float64 `json:"FilamentDensity"` // g/cm^3
 	}
 
 	v1Process struct {
-		Name                                string
-		LayerHeight, FirstLayerHeight       float64 // mm
-		LineWidth, FirstLayerLineWidth      float64 // mm
-		Perimeters, TopLayers, BottomLayers int
-		InfillDensity                       float64
-		InfillPattern                       config.InfillPattern
-		SeamPosition                        config.SeamPosition
-		SkirtLoops                          int
-		SkirtDistance, BrimWidth            float64 // mm
-		BridgeSpeed                         float64 // mm/s
-		BridgeFlow                          float64
-		SupportEnable                       bool
-		SupportThreshold                    float64   // degrees
-		SupportBranchDiameter               float64   // mm
-		SupportSpeed                        float64   // mm/s
-		TravelSpeed, PerimeterSpeed         float64   // mm/s
-		ExternalPerimeterSpeed, InfillSpeed float64   // mm/s
-		SolidInfillSpeed, FirstLayerSpeed   float64   // mm/s
-		InfillAngles                        []float64 // degrees
+		Name                   string               `json:"Name"`
+		LayerHeight            float64              `json:"LayerHeight"`
+		FirstLayerHeight       float64              `json:"FirstLayerHeight"` // mm
+		LineWidth              float64              `json:"LineWidth"`
+		FirstLayerLineWidth    float64              `json:"FirstLayerLineWidth"` // mm
+		Perimeters             int                  `json:"Perimeters"`
+		TopLayers              int                  `json:"TopLayers"`
+		BottomLayers           int                  `json:"BottomLayers"`
+		InfillDensity          float64              `json:"InfillDensity"`
+		InfillPattern          config.InfillPattern `json:"InfillPattern"`
+		SeamPosition           config.SeamPosition  `json:"SeamPosition"`
+		SkirtLoops             int                  `json:"SkirtLoops"`
+		SkirtDistance          float64              `json:"SkirtDistance"`
+		BrimWidth              float64              `json:"BrimWidth"`   // mm
+		BridgeSpeed            float64              `json:"BridgeSpeed"` // mm/s
+		BridgeFlow             float64              `json:"BridgeFlow"`
+		SupportEnable          bool                 `json:"SupportEnable"`
+		SupportThreshold       float64              `json:"SupportThreshold"`      // degrees
+		SupportBranchDiameter  float64              `json:"SupportBranchDiameter"` // mm
+		SupportSpeed           float64              `json:"SupportSpeed"`          // mm/s
+		TravelSpeed            float64              `json:"TravelSpeed"`
+		PerimeterSpeed         float64              `json:"PerimeterSpeed"` // mm/s
+		ExternalPerimeterSpeed float64              `json:"ExternalPerimeterSpeed"`
+		InfillSpeed            float64              `json:"InfillSpeed"` // mm/s
+		SolidInfillSpeed       float64              `json:"SolidInfillSpeed"`
+		FirstLayerSpeed        float64              `json:"FirstLayerSpeed"` // mm/s
+		InfillAngles           []float64            `json:"InfillAngles"`    // degrees
 	}
 
 	v1Meta struct {
-		Version  int
-		Printer  v1Printer
-		Filament v1Filament
-		Process  v1Process
-		Objects  []objectMeta
+		Version  int          `json:"Version"`
+		Printer  v1Printer    `json:"Printer"`
+		Filament v1Filament   `json:"Filament"`
+		Process  v1Process    `json:"Process"`
+		Objects  []objectMeta `json:"Objects"`
 	}
 )
 

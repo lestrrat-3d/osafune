@@ -153,17 +153,17 @@ func rectilinearLines(e ExPolygon, angleDeg, spacing float64) [][]Point2 {
 	}
 
 	rotated := rotateExPolygon(e, rot)
-	min, max := boundsOf(rotated.BoundingBox())
-	if max.Y-min.Y < spacing*0.5 {
+	lo, hi := boundsOf(rotated.BoundingBox())
+	if hi.Y-lo.Y < spacing*0.5 {
 		return nil
 	}
 
 	// Anchor lines on multiples of spacing so adjacent layers' patterns
 	// line up at the boundary; otherwise the pattern jitters between
 	// layers and printed surfaces look noisy.
-	yStart := math.Floor(min.Y/spacing)*spacing + spacing*0.5
+	yStart := math.Floor(lo.Y/spacing)*spacing + spacing*0.5
 	var out [][]Point2
-	for y := yStart; y <= max.Y; y += spacing {
+	for y := yStart; y <= hi.Y; y += spacing {
 		xs := scanlineCrossings(rotated, y)
 		// Inside the polygon between pairs of sorted crossings.
 		sort.Float64s(xs)
@@ -214,7 +214,7 @@ func polyCrossings(p Polygon, y float64) []float64 {
 	}
 	var xs []float64
 	n := len(p)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		a := p[i]
 		b := p[(i+1)%n]
 		// Half-open rule: treat the edge as containing the lower endpoint

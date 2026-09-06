@@ -47,10 +47,7 @@ func (d *ToolpathDrawer) ssao(w, h, ss int, vp *ViewProj) {
 	band := (h + nw - 1) / nw
 	var wg sync.WaitGroup
 	for y0 := 0; y0 < h; y0 += band {
-		y1 := y0 + band
-		if y1 > h {
-			y1 = h
-		}
+		y1 := min(y0+band, h)
 		wg.Add(1)
 		go func(y0, y1 int) {
 			defer wg.Done()
@@ -65,7 +62,7 @@ func (d *ToolpathDrawer) ssaoBand(w, h, y0, y1 int, fw, fh, radius float32, vp *
 	inv2fh := 2.0 / fh
 	for y := y0; y < y1; y++ {
 		row := y * w
-		for x := 0; x < w; x++ {
+		for x := range w {
 			idx := row + x
 			zc := d.zbuf[idx]
 			if zc == neg {

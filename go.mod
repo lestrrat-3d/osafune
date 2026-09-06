@@ -2,6 +2,8 @@ module github.com/lestrrat-3d/osafune
 
 go 1.26.1
 
+toolchain go1.26.6
+
 require (
 	github.com/guigui-gui/guigui v0.0.0-20260517124159-c9a57b611f94
 	github.com/hajimehoshi/ebiten/v2 v2.10.0-alpha.11.0.20260517123839-aa5fda041ba7
@@ -27,7 +29,7 @@ require (
 	github.com/lestrrat-go/option/v3 v3.0.0-alpha1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/image v0.39.0 // indirect
+	golang.org/x/image v0.43.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

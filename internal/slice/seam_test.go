@@ -23,9 +23,9 @@ func isRotationOf(got, want []slice.Point2) bool {
 		return false
 	}
 	n := len(want)
-	for s := 0; s < n; s++ {
+	for s := range n {
 		ok := true
-		for i := 0; i < n; i++ {
+		for i := range n {
 			if got[i] != want[(s+i)%n] {
 				ok = false
 				break
@@ -70,7 +70,7 @@ func TestPlaceSeamsRandomDeterministicButVaries(t *testing.T) {
 	// Varies across layers (scattering the seam). Sample several; expect at
 	// least two distinct start vertices.
 	seen := map[slice.Point2]struct{}{}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		seen[seamAt(i)] = struct{}{}
 	}
 	require.Greater(t, len(seen), 1, "random seam should land on more than one vertex")

@@ -23,19 +23,19 @@ const projectMetaPath = "/Metadata/osafune.json"
 const projectVersion = 2
 
 type objectMeta struct {
-	Name   string
-	Hidden bool
+	Name   string `json:"Name"`
+	Hidden bool   `json:"Hidden"`
 }
 
 // projectMeta is the JSON payload embedded in a saved project: the plate's
 // three profiles plus per-object bookkeeping. Geometry lives in the standard
 // 3MF model, not here.
 type projectMeta struct {
-	Version  int
-	Printer  config.Printer
-	Filament config.Filament
-	Process  config.Process
-	Objects  []objectMeta
+	Version  int             `json:"Version"`
+	Printer  config.Printer  `json:"Printer"`
+	Filament config.Filament `json:"Filament"`
+	Process  config.Process  `json:"Process"`
+	Objects  []objectMeta    `json:"Objects"`
 }
 
 // SaveProjectFile writes the scene geometry and the plate's settings to a 3MF
@@ -109,7 +109,9 @@ func decodeMeta(data []byte) (projectMeta, bool) {
 	// The version is read on its own first: a version-1 payload writes bare
 	// numbers where this version writes quantities, so decoding it as the
 	// current shape fails on the first field and tells us nothing.
-	var probe struct{ Version int }
+	var probe struct {
+		Version int `json:"Version"`
+	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return projectMeta{}, false
 	}

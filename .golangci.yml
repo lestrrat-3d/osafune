@@ -1,0 +1,120 @@
+# The lestrrat-go house config: `default: all` with a curated disable list.
+version: "2"
+linters:
+  default: all
+  disable:
+    - copyloopvar
+    - cyclop
+    - depguard
+    - dupl
+    - embeddedstructfieldcheck
+    - err113
+    - errorlint
+    - exhaustive
+    # exhaustruct flags every partially-initialized struct literal.
+    - exhaustruct
+    - funcorder
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
+    - gocritic
+    - gocyclo
+    - godot
+    - godox
+    - gomodguard
+    - gosec
+    - gosmopolitan
+    - iface
+    - inamedparam
+    - interfacebloat
+    - ireturn
+    - lll
+    - maintidx
+    - makezero
+    - mnd
+    - nakedret
+    - nestif
+    - nlreturn
+    - noinlineerr
+    - nonamedreturns
+    - paralleltest
+    - perfsprint
+    - prealloc
+    - recvcheck
+    - revive
+    - tagliatelle
+    - testifylint
+    - testpackage
+    - thelper
+    - tparallel
+    - varnamelen
+    - wastedassign
+    - wrapcheck
+    - wsl
+    - wsl_v5
+  settings:
+    goconst:
+      min-occurrences: 5
+    govet:
+      disable:
+        - shadow
+        - fieldalignment
+      enable-all: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # The gcode templates are literal machine output, not prose. "; --- end
+      # end gcode ---" closes the "end gcode" block and reads correctly; the
+      # repeated word is the point, and the text is emitted verbatim into every
+      # sliced file, so it is not the linter's to reword.
+      - linters:
+          - dupword
+        path: (^|/)internal/config/config\.go
+      - linters:
+          - staticcheck
+        text: 'ST1003: should not use underscores in package names'
+      - linters:
+          - staticcheck
+        text: SA1019
+      - linters:
+          - errcheck
+        path: /main.go
+      - linters:
+          - errcheck
+          - errchkjson
+          - forcetypeassert
+        path: /*_test.go
+      - linters:
+          - forbidigo
+        path: (^|/)cmd/
+      - linters:
+          - forbidigo
+        path: (^|/)internal/
+      - linters:
+          - forbidigo
+          - errcheck
+        path: /*_test.go
+      - linters:
+          - godoclint
+        path: (^|/)internal/
+    paths:
+      - third_party$
+      - builtin$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$

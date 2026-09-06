@@ -242,7 +242,10 @@ func (v *Viewport) Layout(context *guigui.Context, widgetBounds *guigui.WidgetBo
 // the sliced toolpaths depending on the active [ViewMode].
 func (v *Viewport) Draw(context *guigui.Context, widgetBounds *guigui.WidgetBounds, dst *ebiten.Image) {
 	b := widgetBounds.Bounds()
-	sub := dst.SubImage(b).(*ebiten.Image)
+	sub, ok := dst.SubImage(b).(*ebiten.Image)
+	if !ok {
+		return
+	}
 	// Gradient backdrop + build plate are drawn first; the mesh raster and the
 	// toolpath drawer both leave their output transparent where no geometry
 	// covers, so they composite cleanly on top of the environment.

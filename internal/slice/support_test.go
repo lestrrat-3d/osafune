@@ -18,7 +18,7 @@ func rectEx(x0, y0, x1, y1 float64) slice.ExPolygon {
 func overhangStack() []slice.Layer {
 	const h = 1.0
 	var ls []slice.Layer
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ls = append(ls, slice.Layer{Index: i, Z: float64(i+1) * h, Height: h, Contours: []slice.ExPolygon{rectEx(0, 0, 10, 10)}})
 	}
 	for i := 3; i < 6; i++ {
@@ -77,7 +77,7 @@ func TestGenerateSupportsNoneWithoutOverhang(t *testing.T) {
 	proc.SupportEnable = true
 	// A plain vertical column overhangs nothing.
 	var layers []slice.Layer
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		layers = append(layers, slice.Layer{Index: i, Z: float64(i+1) * 0.2, Height: 0.2, Contours: []slice.ExPolygon{rectEx(0, 0, 10, 10)}})
 	}
 	out := slice.GenerateSupports(layers, &proc)

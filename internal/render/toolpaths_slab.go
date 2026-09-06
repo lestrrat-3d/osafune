@@ -54,8 +54,8 @@ func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut boo
 		if layerH < minLayerHeight {
 			layerH = minLayerHeight
 		}
-		z1 := float32(l.Z)      // top of layer
-		z0 := z1 - layerH       // bottom of layer
+		z1 := float32(l.Z) // top of layer
+		z0 := z1 - layerH  // bottom of layer
 
 		// Caps fill a layer's whole cross-section solid. That is what makes
 		// the closed exterior read as a solid top/bottom — but in a cutaway
@@ -69,7 +69,7 @@ func (d *ToolpathDrawer) buildWorldSlab(layers []slice.Layer, topCut, botCut boo
 				ax, ay := float32(tr[0].X), float32(tr[0].Y)
 				bx, by := float32(tr[1].X), float32(tr[1].Y)
 				cx, cy := float32(tr[2].X), float32(tr[2].Y)
-				out = append(out, wtri{mesh.Vec3{ax, ay, z1}, mesh.Vec3{bx, by, z1}, mesh.Vec3{cx, cy, z1}, up, colUp})       // top cap +Z
+				out = append(out, wtri{mesh.Vec3{ax, ay, z1}, mesh.Vec3{bx, by, z1}, mesh.Vec3{cx, cy, z1}, up, colUp})     // top cap +Z
 				out = append(out, wtri{mesh.Vec3{ax, ay, z0}, mesh.Vec3{cx, cy, z0}, mesh.Vec3{bx, by, z0}, down, colDown}) // bottom cap -Z
 			}
 		}
@@ -94,7 +94,7 @@ func sweepRing(out []wtri, ring slice.Polygon, z0, z1 float32, shade func(mesh.V
 	if n < 3 {
 		return out
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p := ring[i]
 		q := ring[(i+1)%n]
 		px, py := float32(p.X), float32(p.Y)
@@ -168,12 +168,9 @@ func (d *ToolpathDrawer) projectSlab(w, h int, vp *ViewProj) {
 		}
 		chunk := (len(src) + nw - 1) / nw
 		var wg sync.WaitGroup
-		for wi := 0; wi < nw; wi++ {
+		for wi := range nw {
 			lo := wi * chunk
-			hi := lo + chunk
-			if hi > len(src) {
-				hi = len(src)
-			}
+			hi := min(lo+chunk, len(src))
 			if lo >= hi {
 				d.slabBufs[wi] = d.slabBufs[wi][:0]
 				continue
@@ -186,7 +183,7 @@ func (d *ToolpathDrawer) projectSlab(w, h int, vp *ViewProj) {
 		}
 		wg.Wait()
 		d.tris = d.tris[:0]
-		for wi := 0; wi < nw; wi++ {
+		for wi := range nw {
 			d.tris = append(d.tris, d.slabBufs[wi]...)
 		}
 		return

@@ -57,7 +57,7 @@ func (b *AABB) Extend(v Vec3) {
 		b.Max = v
 		return
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if v[i] < b.Min[i] {
 			b.Min[i] = v[i]
 		}
@@ -85,9 +85,9 @@ type Mesh struct {
 // same way whether or not a part is currently visible) but are skipped by
 // the renderer.
 type Object struct {
-	Name    string
-	Mesh    Mesh
-	Hidden  bool
+	Name   string
+	Mesh   Mesh
+	Hidden bool
 }
 
 // Scene is the unit the loader produces and the viewer renders. Objects keep
@@ -111,7 +111,7 @@ func (s *Scene) Bounds() AABB {
 			first = false
 			continue
 		}
-		for ax := 0; ax < 3; ax++ {
+		for ax := range 3 {
 			if ob.Min[ax] < b.Min[ax] {
 				b.Min[ax] = ob.Min[ax]
 			}
@@ -142,7 +142,7 @@ func (s *Scene) Translate(v Vec3) {
 	for oi := range s.Objects {
 		m := &s.Objects[oi].Mesh
 		for ti := range m.Triangles {
-			for vi := 0; vi < 3; vi++ {
+			for vi := range 3 {
 				m.Triangles[ti].Vertices[vi][0] += v[0]
 				m.Triangles[ti].Vertices[vi][1] += v[1]
 				m.Triangles[ti].Vertices[vi][2] += v[2]

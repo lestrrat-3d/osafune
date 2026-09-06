@@ -247,8 +247,8 @@ func transformVertex(m tmf.Matrix, v tmf.Vertex) Vec3 {
 // transform), b second (the outer / parent transform).
 func mulMatrix(a, b tmf.Matrix) tmf.Matrix {
 	var r tmf.Matrix
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 3; j++ {
+	for i := range 4 {
+		for j := range 3 {
 			v := a[i*3]*b[j] + a[i*3+1]*b[3+j] + a[i*3+2]*b[6+j]
 			if i == 3 {
 				v += b[9+j]

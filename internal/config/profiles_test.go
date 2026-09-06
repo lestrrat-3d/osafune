@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,8 +11,28 @@ import (
 	"github.com/lestrrat-3d/osafune/internal/config"
 )
 
+// isolateConfigDir points os.UserConfigDir at a temp directory, on every
+// platform this is tested on. Go reads a different variable on each —
+// XDG_CONFIG_HOME on Linux and the BSDs, HOME on macOS, AppData on Windows —
+// so setting only the Linux one leaves the other two reading, and
+// EnsureDefaultProfiles writing, the developer's real config directory. That is
+// a test that fails for the wrong reason and a side effect besides.
+func isolateConfigDir(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	switch runtime.GOOS {
+	case "windows":
+		t.Setenv("AppData", dir)
+	case "darwin":
+		t.Setenv("HOME", dir)
+	default:
+		t.Setenv("XDG_CONFIG_HOME", dir)
+	}
+}
+
 func TestProfileRoundTrip(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate from the real config dir
+	isolateConfigDir(t)
 
 	p := config.DefaultProcess()
 	p.Name = "My Fast"
@@ -31,7 +52,7 @@ func TestProfileRoundTrip(t *testing.T) {
 }
 
 func TestEnsureDefaultProfiles(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 
 	require.NoError(t, config.EnsureDefaultProfiles())
 	for _, kind := range []string{config.KindPrinter, config.KindFilament, config.KindProcess} {
@@ -44,7 +65,7 @@ func TestEnsureDefaultProfiles(t *testing.T) {
 }
 
 func TestListProfilesMissingDirIsEmpty(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	isolateConfigDir(t)
 	names, err := config.ListProfiles(config.KindPrinter)
 	require.NoError(t, err, "a missing profile dir is empty, not an error")
 	require.Empty(t, names)

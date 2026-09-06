@@ -17,7 +17,7 @@ import (
 // project as in-front.
 func TestFitNearPlaneTiny(t *testing.T) {
 	t.Parallel()
-	var cam render.Camera = render.Defaults()
+	var cam = render.Defaults()
 	cam.Fit(mesh.AABB{Min: mesh.Vec3{0, 0, 0}, Max: mesh.Vec3{100, 100, 100}})
 
 	require.Less(t, float64(cam.Near), float64(cam.Distance)*0.001,
@@ -48,7 +48,7 @@ func TestUnprojectRoundTrip(t *testing.T) {
 		sx := (pr.X + 1) * 0.5 * fw
 		sy := (1 - (pr.Y+1)*0.5) * fh
 		got := vp.Unproject(sx, sy, fw, fh, pr.ViewZ)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			require.InDelta(t, float64(p[i]), float64(got[i]), 1e-2,
 				"axis %d of unprojected point %v", i, p)
 		}

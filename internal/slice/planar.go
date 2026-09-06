@@ -176,7 +176,7 @@ func intersectTriangle(t *mesh.Triangle, plane float64) (segment2, bool) {
 		side    int // -1 below, +1 above-or-on
 	}
 	var vs [3]vz
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		v := t.Vertices[i]
 		z := float64(v[2])
 		s := -1
@@ -193,7 +193,7 @@ func intersectTriangle(t *mesh.Triangle, plane float64) (segment2, bool) {
 	// The "lone" vertex is the one on the opposite side from the other
 	// two. Two edges cross the plane: lone→other1 and lone→other2.
 	lone := -1
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if vs[i].side != vs[(i+1)%3].side && vs[i].side != vs[(i+2)%3].side {
 			lone = i
 			break

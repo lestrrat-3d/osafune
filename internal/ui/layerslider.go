@@ -86,7 +86,7 @@ func (s *LayerRangeSlider) Upper() int { return s.upper }
 func (s *LayerRangeSlider) OnChanged(f func(lower, upper int)) { s.onChanged = f }
 
 func (s *LayerRangeSlider) thumbRadius(context *guigui.Context) int {
-	return int(basicwidget.UnitSize(context) * 7 / 16)
+	return basicwidget.UnitSize(context) * 7 / 16
 }
 
 // trackBounds returns the vertical strip the track is drawn in. The
@@ -133,13 +133,8 @@ func (s *LayerRangeSlider) yToValue(context *guigui.Context, widgetBounds *guigu
 		return s.rangeLo
 	}
 	rate := float64(y1-y) / float64(y1-y0)
-	v := s.rangeLo + int(rate*float64(s.rangeHi-s.rangeLo)+0.5)
-	if v < s.rangeLo {
-		v = s.rangeLo
-	}
-	if v > s.rangeHi {
-		v = s.rangeHi
-	}
+	v := max(s.rangeLo+int(rate*float64(s.rangeHi-s.rangeLo)+0.5), s.rangeLo)
+	v = min(v, s.rangeHi)
 	return v
 }
 

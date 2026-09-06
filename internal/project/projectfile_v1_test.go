@@ -140,7 +140,9 @@ func TestLoadUnreadableMetaFallsBackToDefaults(t *testing.T) {
 	_, plate, err := project.LoadProjectFile(writeV1Project(t, `{"Version": 99, "Printer": "nonsense"}`))
 	require.NoError(t, err)
 
-	var meta struct{ Version int }
+	var meta struct {
+		Version int `json:"Version"`
+	}
 	require.NoError(t, json.Unmarshal([]byte(v1Payload), &meta))
 	require.Equal(t, 1, meta.Version)
 	require.Equal(t, "Generic 256mm Bed", plate.Printer.Name)

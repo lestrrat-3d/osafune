@@ -74,23 +74,9 @@ func (c *Camera) Fit(bbox mesh.AABB) {
 // right (camera X), up (camera Y), forward (toward Target, camera -Z).
 // The eye position is also returned for convenience.
 func (c *Camera) Basis() (eye, right, up, forward mesh.Vec3) {
-	cosP := float32(math.Cos(float64(c.Pitch)))
-	sinP := float32(math.Sin(float64(c.Pitch)))
-	cosY := float32(math.Cos(float64(c.Yaw)))
-	sinY := float32(math.Sin(float64(c.Yaw)))
-
-	// Direction from Target to eye (the camera offsets away from the target
-	// along this vector). Z-up; on the equator (Pitch=0) the camera sits in
-	// the X/Y plane.
-	dx := cosP * cosY
-	dy := cosP * sinY
-	dz := sinP
-	eye = mesh.Vec3{
-		c.Target[0] + dx*c.Distance,
-		c.Target[1] + dy*c.Distance,
-		c.Target[2] + dz*c.Distance,
-	}
-	forward = mesh.Vec3{-dx, -dy, -dz}
+	d := c.eyeDir()
+	eye = c.Eye()
+	forward = mesh.Vec3{-d[0], -d[1], -d[2]}
 
 	// Right is forward × worldUp, normalised. Pitch is clamped before this
 	// runs so worldUp and forward are never colinear.
@@ -98,6 +84,32 @@ func (c *Camera) Basis() (eye, right, up, forward mesh.Vec3) {
 	right = normalize(cross(forward, worldUp))
 	up = cross(right, forward) // already unit length since right and forward are orthonormal.
 	return
+}
+
+// eyeDir returns the unit vector pointing from Target toward the eye, which is
+// the direction Pitch and Yaw name. Z-up, so on the equator (Pitch=0) the
+// camera sits in the X/Y plane. [Camera.Eye] offsets along it and
+// [Camera.Basis] builds every other axis from it, so the trigonometry is
+// written once.
+func (c *Camera) eyeDir() mesh.Vec3 {
+	cosP := float32(math.Cos(float64(c.Pitch)))
+	sinP := float32(math.Sin(float64(c.Pitch)))
+	cosY := float32(math.Cos(float64(c.Yaw)))
+	sinY := float32(math.Sin(float64(c.Yaw)))
+	return mesh.Vec3{cosP * cosY, cosP * sinY, sinP}
+}
+
+// Eye returns the camera's world-space position, which is Target offset by
+// Distance along [Camera.eyeDir]. Backface culling needs only this, and asking
+// for it by name beats discarding the three other values [Camera.Basis]
+// returns.
+func (c *Camera) Eye() mesh.Vec3 {
+	d := c.eyeDir()
+	return mesh.Vec3{
+		c.Target[0] + d[0]*c.Distance,
+		c.Target[1] + d[1]*c.Distance,
+		c.Target[2] + d[2]*c.Distance,
+	}
 }
 
 // Projected is the result of projecting a world point through the camera.
@@ -209,7 +221,7 @@ func (c *Camera) PanScreen(dxPixels, dyPixels float32, viewportH int) {
 	dyW := dyPixels * worldPerPixel
 	// Dragging right (positive dx) moves the world to the right of the
 	// camera, which means Target moves LEFT in world space.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		c.Target[i] += -right[i]*dxW + up[i]*dyW
 	}
 }

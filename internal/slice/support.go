@@ -2,6 +2,7 @@ package slice
 
 import (
 	"math"
+	"slices"
 
 	"github.com/lestrrat-3d/osafune/internal/config"
 )
@@ -55,8 +56,8 @@ func GenerateSupports(layers []Layer, process *config.ResolvedProcess) [][]Path 
 	width := process.LineWidth
 
 	var carry []supNode
-	for L := len(layers) - 1; L >= 0; L-- {
-		layerH := layers[L].Height
+	for L, v := range slices.Backward(layers) {
+		layerH := v.Height
 		if layerH <= 0 {
 			layerH = 0.2
 		}
@@ -67,7 +68,7 @@ func GenerateSupports(layers []Layer, process *config.ResolvedProcess) [][]Path 
 		cur := mergeAndLean(carry, leanStep, maxR)
 		var emit, next []supNode
 		for _, n := range cur {
-			if regionContains(layers[L].Contours, n.pt) {
+			if regionContains(v.Contours, n.pt) {
 				continue // inside the model here → the model supports it; stop
 			}
 			emit = append(emit, n)
@@ -98,9 +99,9 @@ func overhangTips(layers []Layer, L int, maxDXY, tipR float64) []supNode {
 		if r.Outer.Area() < supportMinOverhang {
 			continue
 		}
-		min, max := boundsOf(r.BoundingBox())
-		for x := min.X + supportSampleSpacing*0.5; x < max.X; x += supportSampleSpacing {
-			for y := min.Y + supportSampleSpacing*0.5; y < max.Y; y += supportSampleSpacing {
+		lo, hi := boundsOf(r.BoundingBox())
+		for x := lo.X + supportSampleSpacing*0.5; x < hi.X; x += supportSampleSpacing {
+			for y := lo.Y + supportSampleSpacing*0.5; y < hi.Y; y += supportSampleSpacing {
 				p := Point2{X: x, Y: y}
 				if exContains(r, p) {
 					tips = append(tips, supNode{pt: p, r: tipR})
@@ -193,7 +194,7 @@ func supportCircles(nodes []supNode, width, speed float64) []Path {
 			r = width * 0.6
 		}
 		pts := make([]Point2, 0, supportCircleSegs)
-		for i := 0; i < supportCircleSegs; i++ {
+		for i := range supportCircleSegs {
 			a := float64(i) / supportCircleSegs * 2 * math.Pi
 			pts = append(pts, Point2{X: n.pt.X + r*math.Cos(a), Y: n.pt.Y + r*math.Sin(a)})
 		}

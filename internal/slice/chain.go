@@ -87,7 +87,7 @@ func chainSegments(segs []segment2) []Polygon {
 	}
 
 	var out []Polygon
-	for start := 0; start < len(segs); start++ {
+	for start := range segs {
 		if used[start] {
 			continue
 		}

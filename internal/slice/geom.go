@@ -44,4 +44,4 @@ func samePoint(a, b Point2) bool { return a.Equal(b, Epsilon) }
 // boundsOf returns the corners of a region's bounding box, the shape the
 // slicer's scanline code wants. polyclip returns a [geom.BBox]; unpacking it
 // here keeps that at one place.
-func boundsOf(b geom.BBox) (min, max Point2) { return b.Min, b.Max }
+func boundsOf(b geom.BBox) (lo, hi Point2) { return b.Min, b.Max }

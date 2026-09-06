@@ -27,7 +27,7 @@ func GeneratePerimeters(layer *Layer, process *config.ResolvedProcess) []ExPolyg
 	// one contour at a time — every wall after the first is offset from
 	// whatever the previous offset produced.
 	current := layer.Contours
-	for w := 0; w < process.Perimeters; w++ {
+	for w := range process.Perimeters {
 		// First wall: offset by half a lineWidth so the extrusion's edge
 		// (which sits half a lineWidth from the path) aligns with the
 		// slice contour. Subsequent walls: a full lineWidth apart.
